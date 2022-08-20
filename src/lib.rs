@@ -1,5 +1,8 @@
-use resource::{buffer::{Vertex, MeshVertex, Indices}, RenderResources, shader::Shader, mesh_static};
-use wgpu::include_wgsl;
+
+use camera::{Camera, PerspectiveProjection, CameraView, CameraUniform};
+use cgmath::*;
+use resource::{buffer::{Vertex, MeshVertex, Indices, InstanceRaw, InstanceUnit, self}, RenderResources, shader::Shader, mesh_static, TypedBindGroupLayout, RenderRef};
+use wgpu::{include_wgsl, util::DeviceExt};
 use winit::{window::Window, event::*};
 
 pub mod texture;
@@ -8,9 +11,19 @@ pub mod resource;
 pub mod camera;
 
 
+// NOTE:
+// Traits:
+//     - MeshVertex:    VertexBuffer
+//     - InstanceUnit:  VertexBuffer
+//     - Uniform:       BindGroup
+// Structs:
+//     - Texture:       BindGroup
+
+
 pub struct UserState {
     clear_color: wgpu::Color,
     diffuse_blue_noise: texture::Texture,
+    airboat_ref: std::ops::Range<usize>,
 }
 
 pub struct State {
@@ -21,6 +34,17 @@ pub struct State {
     pub size: winit::dpi::PhysicalSize<u32>,
     render_resources: RenderResources,
     diffuse_texture: texture::Texture,
+
+    camera_uniform: CameraUniform,
+    camera_buffer_id: usize,
+    camera: Camera,
+    camera_view: CameraView,
+    camera_projection: PerspectiveProjection,
+    camera_controller: CameraController,
+    
+    instances: Vec<buffer::Instance>,
+    instance_buffer: wgpu::Buffer,
+    render_refs: Vec<(usize, Vec<RenderRef>)>,
     
     pub user_state: UserState,
 }
@@ -39,6 +63,13 @@ impl State {
         1, 2, 4,
         2, 3, 4,
     ];
+
+    const NUM_INSTANCES_PER_ROW: u32 = 10;
+    const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = Vector3::new(
+        Self::NUM_INSTANCES_PER_ROW as f32 * 0.5,
+        0.0,
+        Self::NUM_INSTANCES_PER_ROW as f32 * 0.5
+    );
 
     const BACKGROUND_VERTICES: &'static [Vertex] = &[
         Vertex { position: [-0.5, 0.5, 0.0], tex_coords: [0.0, 0.0] }, // A
@@ -87,30 +118,8 @@ impl State {
         };
 
         surface.configure(&device, &config);
-
-        let texture_bind_group_layout = device.create_bind_group_layout(
-            &wgpu::BindGroupLayoutDescriptor {
-                label: Some("Bind Group Layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    }
-                ],
-            }
-        );
+        
+        let mut render_resources = RenderResources::empty();
         
         let bytes = include_bytes!("../res/happy-tree.png");
         let diffuse_texture = texture::Texture::from_bytes(
@@ -119,23 +128,6 @@ impl State {
             bytes,
             "Diffuse Texture",
         ).expect("Texture could not be created");
-        
-        let diffuse_bind_group = device.create_bind_group(
-            &wgpu::BindGroupDescriptor {
-                label: Some("Bind Group"),
-                layout: &texture_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
-                    }
-                ],
-            }
-        );
 
         let noise_bytes = include_bytes!("../res/noise.png");
         let diffuse_blue_noise = texture::Texture::from_bytes(
@@ -145,32 +137,70 @@ impl State {
             "Blue Noise Texture"
         ).expect("Blue Noise texture could not be created");
 
-        let diffuse_blue_noise_bind_group = device.create_bind_group(
-            &wgpu::BindGroupDescriptor {
-                label: Some("Bind Group"),
-                layout: &texture_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&diffuse_blue_noise.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&diffuse_blue_noise.sampler),
-                    }
-                ],
-            }
-        );
+        let texture_layout = render_resources.just_create_texture_layout(&device);
 
-        let mut render_resources = RenderResources::empty();
+        let tree_texture_bind_id = 
+            render_resources.create_texture_bind_group(
+                &device,
+                &texture_layout,
+                &diffuse_texture
+            );
+
+        let noise_texture_bind_id = 
+            render_resources.create_texture_bind_group(
+                &device,
+                &texture_layout,
+                &diffuse_blue_noise
+            );
+
+        let camera_controller = CameraController::new(0.2);
+        let mut camera = Camera::new();
+        let static_camera = Camera::new();
+        let camera_view = CameraView::default();
+        let camera_projection = PerspectiveProjection::default();
+
+        camera.view_matrix = camera_view.build_view_matrix();
+        camera.projection_matrix = camera_projection.build_projection_matrix();
+
+        let mut camera_uniform = CameraUniform::default();
+        camera_uniform.update_view_proj(&camera);
         
+        let mut static_camera_uniform = CameraUniform::default();
+        static_camera_uniform.update_view_proj(&static_camera);
+
+        let camera_buffer_id = render_resources.create_uniform_buffer_init(
+            &device,
+            bytemuck::cast_slice(&[camera_uniform])
+        );
+        let camera_layout: TypedBindGroupLayout<CameraUniform> = render_resources.just_create_uniform_layout(&device);
+        let camera_bind_id = 
+            render_resources.create_uniform_bind_group(
+                &device,
+                &camera_layout,
+                camera_buffer_id
+            );
+        
+        let static_camera_buffer_id = render_resources.create_uniform_buffer_init(
+            &device,
+            bytemuck::cast_slice(&[static_camera_uniform])
+        );
+        let static_camera_bind_id = 
+            render_resources.create_uniform_bind_group(
+                &device,
+                &camera_layout,
+                static_camera_buffer_id
+            );
+
         let basic_wgsl = device.create_shader_module(include_wgsl!("../res/basic.wgsl"));
-        render_resources.create_render_pipeline(
+        let basic_wgsl_pipeline_id = render_resources.create_render_pipeline(
             &device, 
-            &[&texture_bind_group_layout], 
+            &[
+                &texture_layout,
+                &camera_layout,
+            ], 
             &Shader::with_final(
                 basic_wgsl,
-                vec![Vertex::layout()],
+                vec![Vertex::layout(), InstanceRaw::layout()],
                 vec![Some(wgpu::ColorTargetState {
                     format: config.format,
                     blend: Some(wgpu::BlendState::REPLACE),
@@ -179,35 +209,92 @@ impl State {
             ), 
             wgpu::PrimitiveTopology::TriangleList
         );
-        
-        render_resources.push_bind_group(diffuse_bind_group);
-        render_resources.push_bind_group(diffuse_blue_noise_bind_group);
 
-        let mesh: mesh_static::Mesh<Vertex> = 
+        let pentagon_mesh: mesh_static::Mesh<Vertex> = 
             mesh_static::Mesh::with_all(
                 wgpu::PrimitiveTopology::TriangleList,
                 Self::VERTICES.to_owned(),
                 Some(Indices::U16(Self::INDICES.to_owned())),
             );
-        render_resources.create_gpu_mesh(
+        let pentagon_mesh_id = render_resources.create_gpu_mesh(
             &device,
-            &mesh
+            &pentagon_mesh
         );
-
+        
         let background_mesh: mesh_static::Mesh<Vertex> = 
-            mesh_static::Mesh::with_all(
-                wgpu::PrimitiveTopology::TriangleList,
-                Self::BACKGROUND_VERTICES.to_owned(),
-                Some(Indices::U16(Self::BACKGROUND_INDICES.to_owned())),
-            );
-        render_resources.create_gpu_mesh(
+        mesh_static::Mesh::with_all(
+            wgpu::PrimitiveTopology::TriangleList,
+            Self::BACKGROUND_VERTICES.to_owned(),
+            Some(Indices::U16(Self::BACKGROUND_INDICES.to_owned())),
+        );
+        let background_mesh_id = render_resources.create_gpu_mesh(
             &device,
             &background_mesh
         );
+        
+        let model: mesh_static::Model<Vertex> = mesh_static::Mesh::load_obj("res/airboat.obj");
+        let model_mesh_count = model.meshes.len();
+        let mut maxi = 0;
+        for mesh in model.meshes {
+            maxi = render_resources.create_gpu_mesh(&device, &mesh);
+        }
+        let airboat_ref = maxi - model_mesh_count + 1 .. maxi+1;
+
+        let instances = (0..Self::NUM_INSTANCES_PER_ROW).flat_map(|z| {
+            (0..Self::NUM_INSTANCES_PER_ROW).map(move |x| {
+                let position = cgmath::Vector3 { x: x as f32, y: 0.0, z: z as f32 } - Self::INSTANCE_DISPLACEMENT;
+
+                let rotation = if position.is_zero() {
+                    // this is needed so an object at (0, 0, 0) won't get scaled to zero
+                    // as Quaternions can effect scale if they're not created correctly
+                    Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+                } else {
+                    Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+                };
+
+                buffer::Instance {
+                    position, rotation,
+                }
+            })
+        }).collect::<Vec<_>>();
+
+        let instance_data = instances
+            .iter()
+            .map(|ins| {
+                ins.to_raw()
+            })
+            .collect::<Vec<_>>();
+
+        let instance_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Instance Buffer"),
+                contents: bytemuck::cast_slice(&instance_data),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+
+        let pentagon = RenderRef {
+            pipeline: basic_wgsl_pipeline_id,
+            mesh: pentagon_mesh_id,
+            bind_groups: vec![
+                tree_texture_bind_id,
+                camera_bind_id,
+            ],
+        };
+
+        let background = RenderRef {
+            pipeline: basic_wgsl_pipeline_id,
+            mesh: background_mesh_id,
+            bind_groups: vec![
+                noise_texture_bind_id,
+                static_camera_bind_id,
+            ],
+        };
 
         let user_state = UserState {
             clear_color: wgpu::Color::BLACK,
             diffuse_blue_noise,
+            airboat_ref,
         };
 
         Self {
@@ -218,10 +305,27 @@ impl State {
             size,
             render_resources,
             diffuse_texture,
-            // main_render_pipeline,
-            // vertex_buffer,
-            // index_buffer,
-            // diffuse_bind_group,
+            
+            camera_uniform,
+            camera_buffer_id,
+            camera,
+            camera_view,
+            camera_projection,
+            camera_controller,
+
+            instances,
+            instance_buffer,
+
+            render_refs: vec![
+                (
+                    basic_wgsl_pipeline_id,
+                    vec![
+                        // background,
+                        pentagon,
+                    ]
+                )
+            ],
+            
             user_state,
         }
     }
@@ -236,6 +340,7 @@ impl State {
     }
 
     pub fn input(&mut self, event: &WindowEvent) -> bool {
+        self.camera_controller.process_events(event);
         match event {
             WindowEvent::CursorMoved { position, .. } => {
                 self.user_state.clear_color = wgpu::Color {
@@ -265,7 +370,13 @@ impl State {
     }
 
     pub fn update(&mut self) {
+        // self.camera_view.eye += (0.0, 0.1, 0.1).into();
+        self.camera_controller.update_camera_view(&mut self.camera_view);
 
+        self.camera.view_matrix = self.camera_view.build_view_matrix();
+        self.camera_uniform.update_view_proj(&self.camera);
+        let camera_buffer = self.render_resources.buffers.get(self.camera_buffer_id).unwrap();
+        self.queue.write_buffer(camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -294,8 +405,12 @@ impl State {
                 }
             );
 
-            self.render_pass_draw(&mut render_pass, 0, 1, 1);
-            self.render_pass_draw(&mut render_pass, 0, 0, 0);
+            for (pipeline_id, render_refs) in &self.render_refs {
+                self.set_pipeline(&mut render_pass, *pipeline_id);
+                for render_ref in render_refs {   
+                    self.render_pass_draw(&mut render_pass, render_ref);
+                }
+            }
 
         } // drop(render_pass) <- mut borrow encoder <- mut borrow self
             
@@ -305,23 +420,31 @@ impl State {
         Ok(())
     }
 
-    fn render_pass_draw<'a>(
+    fn set_pipeline<'a>(
         &'a self,
         render_pass: &mut wgpu::RenderPass<'a>,
         render_pipeline_id: usize,
-        bind_group_id: usize,
-        mesh_id: usize,
     ) {
         let render_pipeline = 
             &self.render_resources.render_pipelines[render_pipeline_id];
-        let bind_group_0 = 
-            &self.render_resources.bind_groups[bind_group_id];
-        let mesh_0 = 
-            &self.render_resources.meshes[mesh_id];
-
+            
         render_pass.set_pipeline(render_pipeline);
-        render_pass.set_bind_group(0, bind_group_0, &[]);
+    }
+
+    fn render_pass_draw<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        render_ref: &RenderRef,
+    ) {
+        let mesh_0 = 
+            &self.render_resources.meshes[render_ref.mesh];
+
+        for (index, bind_group_id) in (&render_ref.bind_groups).into_iter().enumerate() {
+            let bind_group = &self.render_resources.bind_groups[*bind_group_id];
+            render_pass.set_bind_group(index as u32, bind_group, &[]);
+        }
         render_pass.set_vertex_buffer(0, mesh_0.vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         match &mesh_0.assembly {
             mesh_static::GpuMeshAssembly::Indexed {
                 index_buffer,
@@ -329,13 +452,101 @@ impl State {
                 index_format
             } => {
                 render_pass.set_index_buffer(index_buffer.slice(..), *index_format);
-                render_pass.draw_indexed(0..*index_count as u32, 0, 0..1);
+                render_pass.draw_indexed(0..*index_count as u32, 0, 0..self.instances.len() as u32);
             },
             mesh_static::GpuMeshAssembly::NonIndexed {
                 vertex_count
             } => {
-                render_pass.draw(0..*vertex_count as u32, 0..1);
+                render_pass.draw(0..*vertex_count as u32, 0..self.instances.len() as u32);
             },
+        }
+    }
+}
+
+
+struct CameraController {
+    speed: f32,
+    is_forward_pressed: bool,
+    is_backward_pressed: bool,
+    is_left_pressed: bool,
+    is_right_pressed: bool,
+}
+
+impl CameraController {
+    fn new(speed: f32) -> Self {
+        Self {
+            speed,
+            is_forward_pressed: false,
+            is_backward_pressed: false,
+            is_left_pressed: false,
+            is_right_pressed: false,
+        }
+    }
+
+    fn process_events(&mut self, event: &WindowEvent) -> bool {
+        match event {
+            WindowEvent::KeyboardInput {
+                input: KeyboardInput {
+                    state,
+                    virtual_keycode: Some(keycode),
+                    ..
+                },
+                ..
+            } => {
+                let is_pressed = *state == ElementState::Pressed;
+                match keycode {
+                    VirtualKeyCode::W | VirtualKeyCode::Up => {
+                        self.is_forward_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::A | VirtualKeyCode::Left => {
+                        self.is_left_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::S | VirtualKeyCode::Down => {
+                        self.is_backward_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::D | VirtualKeyCode::Right => {
+                        self.is_right_pressed = is_pressed;
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn update_camera_view(&self, camera_view: &mut CameraView) {
+        use cgmath::InnerSpace;
+        let forward = camera_view.target - camera_view.eye;
+        let forward_norm = forward.normalize();
+        let forward_mag = forward.magnitude();
+
+        // Prevents glitching when camera gets too close to the
+        // center of the scene.
+        if self.is_forward_pressed && forward_mag > self.speed {
+            camera_view.eye += forward_norm * self.speed;
+        }
+        if self.is_backward_pressed {
+            camera_view.eye -= forward_norm * self.speed;
+        }
+
+        let right = forward_norm.cross(camera_view.up);
+
+        // Redo radius calc in case the fowrard/backward is pressed.
+        let forward = camera_view.target - camera_view.eye;
+        let forward_mag = forward.magnitude();
+
+        if self.is_right_pressed {
+            // Rescale the distance between the target and eye so 
+            // that it doesn't change. The eye therefore still 
+            // lies on the circle made by the target and eye.
+            camera_view.eye = camera_view.target - (forward + right * self.speed).normalize() * forward_mag;
+        }
+        if self.is_left_pressed {
+            camera_view.eye = camera_view.target - (forward - right * self.speed).normalize() * forward_mag;
         }
     }
 }

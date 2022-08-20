@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use cgmath::{Vector3, Quaternion};
 
 
 pub enum Indices {
@@ -32,6 +33,7 @@ pub trait MeshVertex: Sized + Pod + Zeroable {
         std::mem::size_of::<Self>() as u64
     }
 
+    // NOTE: I believe my Vertex/Mesh architecture allows 'static Layout
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: Self::size() as wgpu::BufferAddress,
@@ -50,6 +52,52 @@ pub trait FromRawVertices: MeshVertex {
     ) -> Vec<Self>;
 }
 
+pub trait FromRawVertex: MeshVertex {
+    fn from_raw(
+        position: &[f32; 3],
+        texcoord: &[f32; 2],
+        normal: &[f32; 3],
+        vertex_color: &[f32; 3],
+    ) -> Self;
+}
+
+pub trait InstanceUnit: Sized + Pod + Zeroable {
+    // const ATTR_NAMES: &'static [&'static str];
+    const ATTRIBUTES: &'static [wgpu::VertexAttribute];
+
+    fn size() -> u64 {
+        std::mem::size_of::<Self>() as u64
+    }
+
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: Self::size() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: Self::ATTRIBUTES,
+        }
+    }
+}
+
+pub trait Uniform: Pod + Zeroable {
+    const ENTRIES: &'static [wgpu::BindGroupLayoutEntry];
+
+    fn layout_desc() -> wgpu::BindGroupLayoutDescriptor<'static> {
+        wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: Self::ENTRIES,
+        }
+    }
+    // fn resources(&self) -> &[wgpu::BindingResource];
+}
+
+pub trait BindGroup {
+    fn layout_desc() -> wgpu::BindGroupLayoutDescriptor<'static>;
+}
+impl<T> BindGroup for T where T: Uniform {
+    fn layout_desc() -> wgpu::BindGroupLayoutDescriptor<'static> {
+        <Self as Uniform>::layout_desc()
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -70,6 +118,20 @@ impl MeshVertex for Vertex {
             0 => Float32x3,
             1 => Float32x2,
         ];
+}
+
+impl FromRawVertex for Vertex {
+    fn from_raw(
+        position: &[f32; 3],
+        texcoord: &[f32; 2],
+        _normal: &[f32; 3],
+        _vertex_color: &[f32; 3],
+    ) -> Self {
+        Self {
+            position: position.clone(),
+            tex_coords: texcoord.clone(),
+        }
+    }
 }
 
 impl FromRawVertices for Vertex {
@@ -95,4 +157,34 @@ impl FromRawVertices for Vertex {
             })
             .collect()
     }
+}
+
+
+pub struct Instance {
+    pub position: Vector3<f32>,
+    pub rotation: Quaternion<f32>,
+}
+
+impl Instance {
+    pub fn to_raw(&self) -> InstanceRaw {
+        InstanceRaw {
+            model: (cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation)).into(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct InstanceRaw {
+    model: [[f32; 4]; 4],
+}
+
+impl InstanceUnit for InstanceRaw {
+    const ATTRIBUTES: &'static [wgpu::VertexAttribute] = 
+        &wgpu::vertex_attr_array![
+            5 => Float32x4,
+            6 => Float32x4,
+            7 => Float32x4,
+            8 => Float32x4,
+        ];
 }

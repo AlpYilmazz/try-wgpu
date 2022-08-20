@@ -1,6 +1,10 @@
-use std::ops::Index;
+use std::{ops::{Index, Deref}, marker::PhantomData};
 
-use self::buffer::MeshVertex;
+use wgpu::util::DeviceExt;
+
+use crate::texture;
+
+use self::buffer::{MeshVertex, Uniform, BindGroup};
 
 
 pub mod buffer;
@@ -9,11 +13,34 @@ pub mod mesh;
 pub mod mesh_static;
 
 
+pub struct TypedBindGroupLayout<B: BindGroup>(pub wgpu::BindGroupLayout, PhantomData<B>);
+
+impl<B: BindGroup> TypedBindGroupLayout<B> {
+    pub fn hold(layout: wgpu::BindGroupLayout) -> Self {
+        Self(layout, PhantomData)
+    }
+}
+
+impl<B: BindGroup> Deref for TypedBindGroupLayout<B> {
+    type Target = wgpu::BindGroupLayout;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub struct RenderRef {
+    pub pipeline: usize,
+    pub mesh: usize,
+    pub bind_groups: Vec<usize>,
+}
+
 #[derive(Default)]
 pub struct RenderResources {
     pub render_pipelines: Vec<wgpu::RenderPipeline>,
     pub meshes: Vec<mesh_static::GpuMesh>,
     pub bind_groups: Vec<wgpu::BindGroup>,
+    pub buffers: Vec<wgpu::Buffer>,
 }
 
 impl RenderResources {
@@ -36,6 +63,100 @@ impl RenderResources {
     ) -> usize {
         self.bind_groups.push(bind_group);
         self.bind_groups.len() - 1
+    }
+
+    pub fn just_create_bind_group(
+        &self,
+        device: &wgpu::Device,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        mut resources: Vec<wgpu::BindingResource>,
+    ) -> wgpu::BindGroup {
+        let entries: Vec<_> = resources
+            .drain(..)
+            .enumerate()
+            .map(|(i, resource)| {
+                wgpu::BindGroupEntry {
+                    binding: i as u32,
+                    resource,
+                }
+            })
+            .collect();
+        let bind_group = device.create_bind_group(
+            &wgpu::BindGroupDescriptor {
+                label: None,
+                layout: bind_group_layout,
+                entries: &entries,
+            }
+        );
+
+        bind_group
+    }
+    
+    pub fn just_create_uniform_layout<U: Uniform>(&self, device: &wgpu::Device) -> TypedBindGroupLayout<U> {
+        TypedBindGroupLayout::hold(device.create_bind_group_layout(
+            &U::layout_desc()
+        ))
+    }
+
+    pub fn create_uniform_bind_group<U>
+    (
+        &mut self,
+        device: &wgpu::Device,
+        layout: &TypedBindGroupLayout<U>,
+        uniform_buffer_id: usize,
+    ) -> usize
+    where
+        U: Uniform
+    {
+        let resources = vec![
+            self.buffers.get(uniform_buffer_id).unwrap().as_entire_binding(),
+        ];
+
+        let bind_group = self.just_create_bind_group(device, &layout, resources);
+        self.push_bind_group(bind_group)
+    }
+
+    pub fn just_create_texture_layout(&self, device: &wgpu::Device) -> TypedBindGroupLayout<texture::Texture> {
+        TypedBindGroupLayout::hold(device.create_bind_group_layout(
+            &texture::Texture::layout_desc()
+        ))
+    }
+
+    pub fn create_texture_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &TypedBindGroupLayout<texture::Texture>,
+        texture: &texture::Texture,
+    ) -> usize {
+        let resources = vec![
+            wgpu::BindingResource::TextureView(&texture.view),
+            wgpu::BindingResource::Sampler(&texture.sampler),
+        ];
+
+        let bind_group = self.just_create_bind_group(device, &layout, resources);
+        self.push_bind_group(bind_group)
+    }
+
+    pub fn push_buffer(
+        &mut self,
+        buffer: wgpu::Buffer,
+    ) -> usize {
+        self.buffers.push(buffer);
+        self.buffers.len() - 1
+    }
+
+    pub fn create_uniform_buffer_init(
+        &mut self,
+        device: &wgpu::Device,
+        contents: &[u8],
+    ) -> usize {
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        self.push_buffer(uniform_buffer)
     }
 
     pub fn create_render_pipeline(

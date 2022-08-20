@@ -1,7 +1,11 @@
 use wgpu::util::DeviceExt;
 
-use super::buffer::{MeshVertex, Indices, FromRawVertices};
+use super::buffer::{MeshVertex, Indices, FromRawVertex};
 
+
+pub struct Model<V: MeshVertex> {
+    pub meshes: Vec<Mesh<V>>,
+}
 
 pub struct Mesh<V: MeshVertex> {
     primitive_topology: wgpu::PrimitiveTopology,
@@ -10,6 +14,8 @@ pub struct Mesh<V: MeshVertex> {
 }
 
 impl<V: MeshVertex> Mesh<V> {
+    const ZERO: f32 = 0.0;
+
     pub fn new(primitive_topology: wgpu::PrimitiveTopology) -> Self {
         Self {
             primitive_topology,
@@ -30,9 +36,9 @@ impl<V: MeshVertex> Mesh<V> {
         }
     }
 
-    pub fn load_obj(filepath: &str) -> Vec<Self>
+    pub fn load_obj(filepath: &str) -> Model<V>
     where
-        V: FromRawVertices,
+        V: FromRawVertex,
     {
         let (models, _) = tobj::load_obj(
             filepath,
@@ -42,12 +48,41 @@ impl<V: MeshVertex> Mesh<V> {
         let meshes: Vec<Mesh<V>> = models
             .into_iter()
             .map(|model| {
-                let vertices: Vec<V> = V::from_raw(
-                    &model.mesh.positions,
-                    &model.mesh.texcoords,
-                    &model.mesh.normals,
-                    &model.mesh.vertex_color
-                );
+                let vertices: Vec<V> = (0..model.mesh.positions.len() / 3)
+                    .into_iter()
+                    .map(|i| {
+                        V::from_raw(
+                            &model.mesh.positions.as_slice()[i..i+3].try_into().unwrap(),
+                            &[
+                                *model.mesh.texcoords.get(i).unwrap_or(&Self::ZERO),
+                                *model.mesh.texcoords.get(i+1).unwrap_or(&Self::ZERO),
+                            ],
+                            &[
+                                *model.mesh.normals.get(i).unwrap_or(&Self::ZERO),
+                                *model.mesh.normals.get(i+1).unwrap_or(&Self::ZERO),
+                                *model.mesh.normals.get(i+2).unwrap_or(&Self::ZERO),
+                            ],
+                            &[
+                                *model.mesh.vertex_color.get(i).unwrap_or(&Self::ZERO),
+                                *model.mesh.vertex_color.get(i+1).unwrap_or(&Self::ZERO),
+                                *model.mesh.vertex_color.get(i+2).unwrap_or(&Self::ZERO),
+                            ],
+                            // &[0.0, 0.0],
+                            // &[0.0, 0.0, 0.0],
+                            // &[0.0, 0.0, 0.0],
+                            // &model.mesh.texcoords.as_slice()[i..i+2].try_into().unwrap_or([0.0, 0.0]),
+                            // &model.mesh.normals.as_slice()[i..i+3].try_into().unwrap_or([0.0, 0.0, 0.0]),
+                            // &model.mesh.vertex_color.as_slice()[i..i+3].try_into().unwrap_or([0.0, 0.0, 0.0]),
+                        )
+                    })
+                    .collect();
+                
+                // V::from_raw(
+                //     &model.mesh.positions,
+                //     &model.mesh.texcoords,
+                //     &model.mesh.normals,
+                //     &model.mesh.vertex_color
+                // );
                 
                 Self::with_all(
                     wgpu::PrimitiveTopology::TriangleList,
@@ -57,7 +92,9 @@ impl<V: MeshVertex> Mesh<V> {
             })
             .collect();
     
-        meshes
+        Model {
+            meshes
+        }
     }
 
     pub fn get_vertices(&self) -> &[V] {
