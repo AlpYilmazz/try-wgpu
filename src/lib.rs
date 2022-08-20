@@ -470,6 +470,8 @@ struct CameraController {
     is_backward_pressed: bool,
     is_left_pressed: bool,
     is_right_pressed: bool,
+    is_up_pressed: bool,
+    is_down_pressed: bool,
 }
 
 impl CameraController {
@@ -480,6 +482,8 @@ impl CameraController {
             is_backward_pressed: false,
             is_left_pressed: false,
             is_right_pressed: false,
+            is_up_pressed: false,
+            is_down_pressed: false,
         }
     }
 
@@ -498,17 +502,25 @@ impl CameraController {
                     VirtualKeyCode::W | VirtualKeyCode::Up => {
                         self.is_forward_pressed = is_pressed;
                         true
-                    }
+                    },
                     VirtualKeyCode::A | VirtualKeyCode::Left => {
                         self.is_left_pressed = is_pressed;
                         true
-                    }
+                    },
                     VirtualKeyCode::S | VirtualKeyCode::Down => {
                         self.is_backward_pressed = is_pressed;
                         true
-                    }
+                    },
                     VirtualKeyCode::D | VirtualKeyCode::Right => {
                         self.is_right_pressed = is_pressed;
+                        true
+                    },
+                    VirtualKeyCode::Space => {
+                        self.is_up_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::LControl => {
+                        self.is_down_pressed = is_pressed;
                         true
                     }
                     _ => false,
@@ -519,7 +531,7 @@ impl CameraController {
     }
 
     fn update_camera_view(&self, camera_view: &mut CameraView) {
-        use cgmath::InnerSpace;
+        // use cgmath::InnerSpace;
         let forward = camera_view.target - camera_view.eye;
         let forward_norm = forward.normalize();
         let forward_mag = forward.magnitude();
@@ -531,6 +543,13 @@ impl CameraController {
         }
         if self.is_backward_pressed {
             camera_view.eye -= forward_norm * self.speed;
+        }
+
+        if self.is_up_pressed {
+            camera_view.eye += camera_view.up.normalize() * self.speed;
+        }
+        if self.is_down_pressed {
+            camera_view.eye -= camera_view.up.normalize() * self.speed;
         }
 
         let right = forward_norm.cross(camera_view.up);
