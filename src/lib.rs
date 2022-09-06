@@ -1,7 +1,9 @@
 
+use std::num::NonZeroU32;
+
 use camera::{Camera, PerspectiveProjection, CameraView, CameraUniform};
 use cgmath::*;
-use resource::{buffer::{Vertex, MeshVertex, Indices, InstanceRaw, InstanceUnit, self}, RenderResources, shader::Shader, mesh_static, TypedBindGroupLayout, RenderRef};
+use resource::{buffer::{Vertex, MeshVertex, Indices, InstanceRaw, InstanceUnit, self}, RenderResources, shader::Shader, mesh, TypedBindGroupLayout, RenderRef};
 use wgpu::{include_wgsl, util::DeviceExt};
 use winit::{window::Window, event::*};
 
@@ -47,6 +49,9 @@ pub struct State {
     render_refs: Vec<(usize, Vec<RenderRef>)>,
     
     pub user_state: UserState,
+    framesave_buffer: wgpu::Buffer,
+    pub recorded_frames: Vec<Vec<u8>>,
+    depth_texture: texture::Texture,
 }
 
 impl State {
@@ -64,7 +69,7 @@ impl State {
         2, 3, 4,
     ];
 
-    const NUM_INSTANCES_PER_ROW: u32 = 10;
+    const NUM_INSTANCES_PER_ROW: u32 = 1;
     const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = Vector3::new(
         Self::NUM_INSTANCES_PER_ROW as f32 * 0.5,
         0.0,
@@ -110,7 +115,7 @@ impl State {
         ).await.unwrap();
         
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface.get_supported_formats(&adapter)[0],
             width: size.width,
             height: size.height,
@@ -210,8 +215,29 @@ impl State {
             wgpu::PrimitiveTopology::TriangleList
         );
 
-        let pentagon_mesh: mesh_static::Mesh<Vertex> = 
-            mesh_static::Mesh::with_all(
+        let depth_texture = texture::Texture::create_depth_texture(
+            &device,
+            &config,
+            "Depth Texture",
+        );
+
+        let cube_mesh = mesh::primitive::create_unit_cube();
+        let cube_mesh_id = render_resources.create_gpu_mesh(
+            &device,
+            &cube_mesh
+        );
+
+        let plane_mesh = mesh::primitive::create_aa_plane(
+            mesh::primitive::PlaneAlign::XZ,
+            20.0, 20.0, 4, 4, Vector3::zero(),
+        );
+        let plane_mesh_id = render_resources.create_gpu_mesh(
+            &device,
+            &plane_mesh
+        );
+
+        let pentagon_mesh: mesh::Mesh<Vertex> = 
+            mesh::Mesh::with_all(
                 wgpu::PrimitiveTopology::TriangleList,
                 Self::VERTICES.to_owned(),
                 Some(Indices::U16(Self::INDICES.to_owned())),
@@ -221,8 +247,8 @@ impl State {
             &pentagon_mesh
         );
         
-        let background_mesh: mesh_static::Mesh<Vertex> = 
-        mesh_static::Mesh::with_all(
+        let background_mesh: mesh::Mesh<Vertex> = 
+        mesh::Mesh::with_all(
             wgpu::PrimitiveTopology::TriangleList,
             Self::BACKGROUND_VERTICES.to_owned(),
             Some(Indices::U16(Self::BACKGROUND_INDICES.to_owned())),
@@ -232,7 +258,7 @@ impl State {
             &background_mesh
         );
         
-        let model: mesh_static::Model<Vertex> = mesh_static::Mesh::load_obj("res/airboat.obj");
+        let model: mesh::Model<Vertex> = mesh::Mesh::load_obj("res/airboat.obj");
         let model_mesh_count = model.meshes.len();
         let mut maxi = 0;
         for mesh in model.meshes {
@@ -244,6 +270,14 @@ impl State {
             (0..Self::NUM_INSTANCES_PER_ROW).map(move |x| {
                 let position = cgmath::Vector3 { x: x as f32, y: 0.0, z: z as f32 } - Self::INSTANCE_DISPLACEMENT;
 
+                let position = cgmath::Vector3 {
+                    x: 0.0, y: 0.0, z: 0.0
+                };
+
+                let scale = cgmath::Vector3 {
+                    x: 1.5, y: 3.0, z: 1.0
+                };
+
                 let rotation = if position.is_zero() {
                     // this is needed so an object at (0, 0, 0) won't get scaled to zero
                     // as Quaternions can effect scale if they're not created correctly
@@ -253,7 +287,7 @@ impl State {
                 };
 
                 buffer::Instance {
-                    position, rotation,
+                    position, scale, rotation,
                 }
             })
         }).collect::<Vec<_>>();
@@ -273,6 +307,24 @@ impl State {
             }
         );
 
+        let cube = RenderRef {
+            pipeline: basic_wgsl_pipeline_id,
+            mesh: cube_mesh_id,
+            bind_groups: vec![
+                tree_texture_bind_id,
+                camera_bind_id,
+            ],
+        };
+
+        let plane = RenderRef {
+            pipeline: basic_wgsl_pipeline_id,
+            mesh: plane_mesh_id,
+            bind_groups: vec![
+                tree_texture_bind_id,
+                camera_bind_id,
+            ],
+        };
+
         let pentagon = RenderRef {
             pipeline: basic_wgsl_pipeline_id,
             mesh: pentagon_mesh_id,
@@ -291,6 +343,19 @@ impl State {
             ],
         };
 
+        let u32_size = std::mem::size_of::<u32>() as u32;
+        let bs_offset = 76800;
+        let framesave_buffer_size = (u32_size * size.width * size.height + bs_offset) as wgpu::BufferAddress;
+        let framesave_buffer_desc = wgpu::BufferDescriptor {
+            size: framesave_buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST
+                // this tells wpgu that we want to read this buffer from the cpu
+                | wgpu::BufferUsages::MAP_READ,
+            label: None,
+            mapped_at_creation: false,
+        };
+        let framesave_buffer = device.create_buffer(&framesave_buffer_desc);
+
         let user_state = UserState {
             clear_color: wgpu::Color::BLACK,
             diffuse_blue_noise,
@@ -304,6 +369,7 @@ impl State {
             config,
             size,
             render_resources,
+            depth_texture,
             diffuse_texture,
             
             camera_uniform,
@@ -321,11 +387,16 @@ impl State {
                     basic_wgsl_pipeline_id,
                     vec![
                         // background,
-                        pentagon,
+                        // pentagon,
+                        plane,
+                        cube,
                     ]
                 )
             ],
-            
+
+            framesave_buffer,
+            recorded_frames: Vec::with_capacity(size.height as usize),
+
             user_state,
         }
     }
@@ -336,6 +407,12 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+            
+            self.depth_texture = texture::Texture::create_depth_texture(
+                &self.device,
+                &self.config,
+                "Depth Texture",
+            );
         }
     }
 
@@ -356,12 +433,18 @@ impl State {
                 input:
                 KeyboardInput {
                     state: ElementState::Pressed,
-                    virtual_keycode: Some(VirtualKeyCode::Space),
+                    virtual_keycode: Some(VirtualKeyCode::R),
                     ..
                 },
                 ..
             } => {
-                // self.user_state.render_pipeline_switch.cycle();
+                save_gif(
+                    "save/record.gif",
+                    &mut self.recorded_frames,
+                    10,
+                    self.size.width as u16,
+                    self.size.height as u16
+                ).unwrap();
 
                 true
             },
@@ -401,7 +484,14 @@ impl State {
                             store: true,
                         },
                     })],
-                    depth_stencil_attachment: None,
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_texture.view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: true,
+                        }),
+                        stencil_ops: None,
+                    }),
                 }
             );
 
@@ -413,8 +503,10 @@ impl State {
             }
 
         } // drop(render_pass) <- mut borrow encoder <- mut borrow self
-            
+        
+        
         self.queue.submit(std::iter::once(encoder.finish()));
+
         output.present();
 
         Ok(())
@@ -446,7 +538,7 @@ impl State {
         render_pass.set_vertex_buffer(0, mesh_0.vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         match &mesh_0.assembly {
-            mesh_static::GpuMeshAssembly::Indexed {
+            mesh::GpuMeshAssembly::Indexed {
                 index_buffer,
                 index_count,
                 index_format
@@ -454,7 +546,7 @@ impl State {
                 render_pass.set_index_buffer(index_buffer.slice(..), *index_format);
                 render_pass.draw_indexed(0..*index_count as u32, 0, 0..self.instances.len() as u32);
             },
-            mesh_static::GpuMeshAssembly::NonIndexed {
+            mesh::GpuMeshAssembly::NonIndexed {
                 vertex_count
             } => {
                 render_pass.draw(0..*vertex_count as u32, 0..self.instances.len() as u32);
@@ -568,4 +660,75 @@ impl CameraController {
             camera_view.eye = camera_view.target - (forward - right * self.speed).normalize() * forward_mag;
         }
     }
+}
+
+
+// let pixel_size = std::mem::size_of::<[u8;4]>() as u32;
+//         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+//         let unpadded_bytes_per_row = pixel_size * self.size.width;
+//         let padding = (align - unpadded_bytes_per_row % align) % align;
+//         let padded_bytes_per_row = unpadded_bytes_per_row + padding;
+
+//         // println!("{}\n{}\n{}\n", padded_bytes_per_row, self.size.height, 
+//         //     padded_bytes_per_row * self.size.height);
+
+//         let frame = output.texture.as_image_copy();
+//         encoder.copy_texture_to_buffer(
+//             frame,
+//             wgpu::ImageCopyBuffer {
+//                 buffer: &self.framesave_buffer,
+//                 layout: wgpu::ImageDataLayout {
+//                     offset: 0,
+//                     bytes_per_row: NonZeroU32::new(padded_bytes_per_row),
+//                     rows_per_image: NonZeroU32::new(self.size.height),
+//                 },
+//             },
+//             wgpu::Extent3d {
+//                 width: self.size.width,
+//                 height: self.size.height,
+//                 depth_or_array_layers: 1,
+//             },
+//         );
+
+//         let buffer_slice = self.framesave_buffer.slice(..);
+//         let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
+//         buffer_slice.map_async(
+//             wgpu::MapMode::Read, 
+//             move |result| {
+//                 tx.send(result).unwrap();
+//             }
+//         );
+//         // wait for the GPU to finish
+//         self.device.poll(wgpu::Maintain::Wait);
+
+//         let result = pollster::block_on(rx.receive());
+
+//         match result {
+//             Some(Ok(())) => {
+//                 let padded_data = buffer_slice.get_mapped_range();
+//                 let data = padded_data
+//                     .chunks(padded_bytes_per_row as _)
+//                     .map(|chunk| &chunk[..unpadded_bytes_per_row as _])
+//                     .flatten()
+//                     .map(|x| *x)
+//                     .collect::<Vec<_>>();
+//                 drop(padded_data);
+//                 self.framesave_buffer.unmap();
+//                 self.recorded_frames.push(data);
+//             }
+//             _ => eprintln!("Something went wrong"),
+//         }
+
+fn save_gif(path: &str, frames: &mut Vec<Vec<u8>>, speed: i32, w: u16, h: u16) -> anyhow::Result<()> {
+    use gif::{Encoder, Frame, Repeat};
+
+    let mut image = std::fs::File::create(path)?;
+    let mut encoder = Encoder::new(&mut image, w, h, &[])?;
+    encoder.set_repeat(Repeat::Infinite)?;
+
+    for mut frame in frames {
+        encoder.write_frame(&Frame::from_rgba_speed(w, h, &mut frame, speed))?;
+    }
+
+    Ok(())
 }

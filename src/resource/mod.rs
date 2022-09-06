@@ -9,8 +9,8 @@ use self::buffer::{MeshVertex, Uniform, BindGroup};
 
 pub mod buffer;
 pub mod shader;
+pub mod mesh_bevy;
 pub mod mesh;
-pub mod mesh_static;
 
 
 pub struct TypedBindGroupLayout<B: BindGroup>(pub wgpu::BindGroupLayout, PhantomData<B>);
@@ -38,7 +38,7 @@ pub struct RenderRef {
 #[derive(Default)]
 pub struct RenderResources {
     pub render_pipelines: Vec<wgpu::RenderPipeline>,
-    pub meshes: Vec<mesh_static::GpuMesh>,
+    pub meshes: Vec<mesh::GpuMesh>,
     pub bind_groups: Vec<wgpu::BindGroup>,
     pub buffers: Vec<wgpu::Buffer>,
 }
@@ -51,9 +51,9 @@ impl RenderResources {
     pub fn create_gpu_mesh<V: MeshVertex>(
         &mut self,
         device: &wgpu::Device,
-        mesh: &mesh_static::Mesh<V>,
+        mesh: &mesh::Mesh<V>,
     ) -> usize {
-        self.meshes.push(mesh_static::GpuMesh::from_mesh(mesh, device));
+        self.meshes.push(mesh::GpuMesh::from_mesh(mesh, device));
         self.meshes.len() - 1
     }
 
@@ -200,7 +200,13 @@ impl RenderResources {
                     // Requires Features::CONSERVATIVE_RASTERIZATION
                     conservative: false,
                 },
-                depth_stencil: None,
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: texture::Texture::DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less, // 1.
+                    stencil: wgpu::StencilState::default(), // 2.
+                    bias: wgpu::DepthBiasState::default(),
+                }),
                 multisample: wgpu::MultisampleState {
                     count: 1,
                     mask: !0,

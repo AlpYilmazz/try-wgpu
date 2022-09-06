@@ -2,6 +2,8 @@ use wgpu::util::DeviceExt;
 
 use super::buffer::{MeshVertex, Indices, FromRawVertex};
 
+pub mod primitive;
+
 
 pub struct Model<V: MeshVertex> {
     pub meshes: Vec<Mesh<V>>,

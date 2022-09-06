@@ -11,6 +11,8 @@ tobj = "3.2.1"
 anyhow = "1.0"
 bluenoise = "0.2.1"
 rand_pcg = "0.3.1"
+futures-intrusive = "0.4.0"
+gif = "0.11.4"
 
 log = "0.4.17"
 env_logger = "0.9.0"

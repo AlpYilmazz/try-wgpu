@@ -162,13 +162,18 @@ impl FromRawVertices for Vertex {
 
 pub struct Instance {
     pub position: Vector3<f32>,
+    pub scale: Vector3<f32>,
     pub rotation: Quaternion<f32>,
 }
 
 impl Instance {
     pub fn to_raw(&self) -> InstanceRaw {
         InstanceRaw {
-            model: (cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation)).into(),
+            model: (
+                cgmath::Matrix4::from_translation(self.position)
+                * cgmath::Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z) 
+                * cgmath::Matrix4::from(self.rotation)
+            ).into(),
         }
     }
 }
