@@ -25,6 +25,18 @@ impl Into<wgpu::IndexFormat> for &Indices {
     }
 }
 
+impl From<Vec<u16>> for Indices {
+    fn from(val: Vec<u16>) -> Self {
+        Self::U16(val)
+    }
+}
+
+impl From<Vec<u32>> for Indices {
+    fn from(val: Vec<u32>) -> Self {
+        Self::U32(val)
+    }
+}
+
 pub trait MeshVertex: Sized + Pod + Zeroable {
     const ATTR_NAMES: &'static [&'static str];
     const ATTRIBUTES: &'static [wgpu::VertexAttribute];

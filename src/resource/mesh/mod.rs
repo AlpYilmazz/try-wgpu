@@ -2,6 +2,7 @@ use wgpu::util::DeviceExt;
 
 use super::buffer::{MeshVertex, Indices, FromRawVertex};
 
+pub mod util;
 pub mod primitive;
 
 
@@ -101,6 +102,10 @@ impl<V: MeshVertex> Mesh<V> {
 
     pub fn get_vertices(&self) -> &[V] {
         &self.vertices
+    }
+
+    pub fn get_vertices_mut(&mut self) -> &mut [V] {
+        &mut self.vertices
     }
 
     pub fn set_vertices(&mut self, vertices: Vec<V>) {

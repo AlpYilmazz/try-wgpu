@@ -82,19 +82,17 @@ pub fn create_aa_plane(
     let mut vertices = Vec::with_capacity(((rows+1) * (cols+1)) as usize);
     let mut indices = Vec::with_capacity((rows * cols * 2 * 3) as usize);
 
-     // TODO: axis specific
     let lu_corner = center + align.pvector(-w/2.0, h/2.0);
     let h_step = h / rows as f32;
     let w_step = w / cols as f32;
     for i in 0..rows+1 {
         for j in 0..cols+1 {
-            // TODO: axis specific
             let base = 
                 lu_corner + align.pvector(j as f32 * w_step, i as f32 * -h_step);
             vertices.push(
                 Vertex {
                     position: [base.x, base.y, base.z],
-                    tex_coords: [0.5, 0.5],
+                    tex_coords: [0.5, 0.9],
                 }
             );
         }

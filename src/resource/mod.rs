@@ -91,7 +91,13 @@ impl RenderResources {
 
         bind_group
     }
-    
+
+    pub fn just_create_bind_group_layout<B: BindGroup>(&self, device: &wgpu::Device) -> TypedBindGroupLayout<B> {
+        TypedBindGroupLayout::hold(device.create_bind_group_layout(
+            &B::layout_desc()
+        ))
+    }
+
     pub fn just_create_uniform_layout<U: Uniform>(&self, device: &wgpu::Device) -> TypedBindGroupLayout<U> {
         TypedBindGroupLayout::hold(device.create_bind_group_layout(
             &U::layout_desc()
@@ -159,6 +165,14 @@ impl RenderResources {
         self.push_buffer(uniform_buffer)
     }
 
+    pub fn push_render_pipeline(
+        &mut self,
+        render_pipeline: wgpu::RenderPipeline,
+    ) -> usize {
+        self.render_pipelines.push(render_pipeline);
+        self.render_pipelines.len() - 1
+    }
+
     pub fn create_render_pipeline(
         &mut self,
         device: &wgpu::Device,
@@ -216,9 +230,7 @@ impl RenderResources {
             }
         );
 
-        self.render_pipelines.push(render_pipeline);
-
-        self.render_pipelines.len() - 1
+        self.push_render_pipeline(render_pipeline)
     }
 }
 

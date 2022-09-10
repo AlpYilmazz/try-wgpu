@@ -1,3 +1,5 @@
+use std::{fs::File, io::BufReader, convert::TryInto};
+
 use image::GenericImageView;
 use anyhow::*;
 
@@ -206,6 +208,124 @@ impl Texture {
 }
 
 impl BindGroup for Texture {
+    fn layout_desc() -> wgpu::BindGroupLayoutDescriptor<'static> {
+        wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &Self::ENTRIES,
+        }
+    }
+}
+
+
+pub struct TextureArray<const N: usize> {
+    pub textures: [wgpu::Texture; N],
+    pub views: [wgpu::TextureView; N],
+    pub sampler: wgpu::Sampler,
+}
+
+impl<const N: usize> TextureArray<N> {
+    const ENTRIES: &'static [wgpu::BindGroupLayoutEntry] = 
+        &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: std::num::NonZeroU32::new(N as u32),
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            }
+        ];
+
+    pub fn load(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        paths: [&str; N],
+    ) -> Result<Self> {
+        let (textures, views): (Vec<_>, Vec<_>) = paths
+            .iter()
+            .map(|path| {
+                let file = File::open(path).unwrap();
+                let img = image::load(BufReader::new(file), image::ImageFormat::Jpeg).unwrap();
+
+                let rgba = img.to_rgba8();
+                let dim = img.dimensions();
+                let raw_img = RawImage::new(&rgba, dim, PixelFormat::RGBA8);
+                
+                let size = wgpu::Extent3d {
+                    width: raw_img.dim.0,
+                    height: raw_img.dim.1,
+                    depth_or_array_layers: 1,
+                };
+        
+                let texture = device.create_texture(
+                    &wgpu::TextureDescriptor {
+                        label: None,
+                        size,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: (&raw_img.pixel_format).into(), // wgpu::TextureFormat::Rgba8UnormSrgb, // RGBA Specific
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    }
+                );
+        
+                queue.write_texture(
+                    wgpu::ImageCopyTexture {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    raw_img.bytes,
+                    wgpu::ImageDataLayout {
+                        offset: 0,
+                        bytes_per_row: std::num::NonZeroU32::new(raw_img.bytes_per_row()), // RGBA Specific
+                        rows_per_image: std::num::NonZeroU32::new(raw_img.dim.1),
+                    },
+                    size
+                );
+        
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                (texture, view)
+            })
+            .unzip();
+        
+        let sampler = device.create_sampler(
+            &wgpu::SamplerDescriptor {
+                // label,
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Nearest,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+                // lod_min_clamp,
+                // lod_max_clamp,
+                // compare,
+                // anisotropy_clamp,
+                // border_color,
+            }
+        );
+
+        Ok(Self {
+            textures: textures.try_into().unwrap(),
+            views: views.try_into().unwrap(),
+            sampler,
+        })
+    }
+}
+
+impl<const N: usize> BindGroup for TextureArray<N> {
     fn layout_desc() -> wgpu::BindGroupLayoutDescriptor<'static> {
         wgpu::BindGroupLayoutDescriptor {
             label: None,

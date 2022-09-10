@@ -11,6 +11,7 @@ pub mod texture;
 pub mod util;
 pub mod resource;
 pub mod camera;
+pub mod skybox;
 
 
 // NOTE:
@@ -104,7 +105,7 @@ impl State {
         let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
-                features: wgpu::Features::empty(),
+                features: wgpu::Features::empty() | wgpu::Features::TEXTURE_BINDING_ARRAY ,
                 limits: if cfg!(target_arch = "wasm32") {
                     wgpu::Limits::downlevel_webgl2_defaults()
                 } else {
@@ -227,10 +228,11 @@ impl State {
             &cube_mesh
         );
 
-        let plane_mesh = mesh::primitive::create_aa_plane(
+        let mut plane_mesh = mesh::primitive::create_aa_plane(
             mesh::primitive::PlaneAlign::XZ,
-            20.0, 20.0, 4, 4, Vector3::zero(),
+            20.0, 20.0, 20, 20, Vector3::zero(),
         );
+        mesh::util::randomize_y(&mut plane_mesh);
         let plane_mesh_id = render_resources.create_gpu_mesh(
             &device,
             &plane_mesh
