@@ -16,7 +16,6 @@ pub fn randomize_y(mesh: &mut Mesh<Vertex>) {
     for vertex in vertices {
         let coord = [0.5 + vertex.position[0] as f64, 0.5 + vertex.position[2] as f64];
         let val = perlin.get(coord) as f32;
-        dbg!(coord, val);
         vertex.position[1] += val;
     }
 }

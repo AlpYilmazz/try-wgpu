@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use cgmath::{Vector3, Matrix4, SquareMatrix};
+use cgmath::{Vector3, Matrix4, SquareMatrix, Zero};
 
 use crate::{resource::{buffer::{MeshVertex, Uniform, Indices}, shader, RenderResources, TypedBindGroupLayout, mesh::Mesh}, camera::CameraUniform, texture};
 
@@ -31,6 +31,15 @@ impl MeshVertex for VertexSkybox {
 pub struct SkyboxTransform {
     pub translation: Vector3<f32>,
     pub scale: Vector3<f32>,
+}
+
+impl Default for SkyboxTransform {
+    fn default() -> Self {
+        Self {
+            translation: Vector3::zero(),
+            scale: Vector3::new(1.0, 1.0, 1.0),
+        }
+    }
 }
 
 #[repr(C)]
@@ -72,6 +81,13 @@ impl Uniform for SkyboxModelUniform {
         ];
 }
 
+pub const SIDES: [&'static str; 6] = [
+    // "negy", "posz", "posx",
+    // "negz", "negx", "posy",
+    "negy", "posz", "posx",
+    "negz", "negx", "posy",
+];
+
 pub fn create_skybox() -> Mesh<VertexSkybox> {
     // z grows towards, out of the screen
     // +z .. |screen| .. -z
@@ -84,34 +100,34 @@ pub fn create_skybox() -> Mesh<VertexSkybox> {
         VertexSkybox { position: [0.5, -0.5, 0.5], tex_index: 0, tex_coords: [1.0, 1.0] }, // 1
 
         // Front, +z, posz
-        VertexSkybox { position: [-0.5, 0.5, 0.5], tex_index: 1, tex_coords: [0.0, 0.0] }, // 4
-        VertexSkybox { position: [-0.5, -0.5, 0.5], tex_index: 1, tex_coords: [0.0, 1.0] }, // 0
-        VertexSkybox { position: [0.5, -0.5, 0.5], tex_index: 1, tex_coords: [1.0, 1.0] }, // 1
-        VertexSkybox { position: [0.5, 0.5, 0.5], tex_index: 1, tex_coords: [1.0, 0.0] }, // 5
+        VertexSkybox { position: [-0.5, 0.5, 0.5], tex_index: 1, tex_coords: [1.0, 0.0] }, // 4
+        VertexSkybox { position: [-0.5, -0.5, 0.5], tex_index: 1, tex_coords: [1.0, 1.0] }, // 0
+        VertexSkybox { position: [0.5, -0.5, 0.5], tex_index: 1, tex_coords: [0.0, 1.0] }, // 1
+        VertexSkybox { position: [0.5, 0.5, 0.5], tex_index: 1, tex_coords: [0.0, 0.0] }, // 5
 
         // Right, +x, posx
-        VertexSkybox { position: [0.5, 0.5, 0.5], tex_index: 2, tex_coords: [0.0, 0.0] }, // 5
-        VertexSkybox { position: [0.5, -0.5, 0.5], tex_index: 2, tex_coords: [0.0, 1.0] }, // 1
-        VertexSkybox { position: [0.5, -0.5, -0.5], tex_index: 2, tex_coords: [1.0, 1.0] }, // 2
-        VertexSkybox { position: [0.5, 0.5, -0.5], tex_index: 2, tex_coords: [1.0, 0.0] }, // 6
+        VertexSkybox { position: [0.5, 0.5, 0.5], tex_index: 2, tex_coords: [1.0, 0.0] }, // 5
+        VertexSkybox { position: [0.5, -0.5, 0.5], tex_index: 2, tex_coords: [1.0, 1.0] }, // 1
+        VertexSkybox { position: [0.5, -0.5, -0.5], tex_index: 2, tex_coords: [0.0, 1.0] }, // 2
+        VertexSkybox { position: [0.5, 0.5, -0.5], tex_index: 2, tex_coords: [0.0, 0.0] }, // 6
 
         // Back, -z, negz
-        VertexSkybox { position: [0.5, 0.5, -0.5], tex_index: 3, tex_coords: [0.0, 0.0] }, // 6
-        VertexSkybox { position: [0.5, -0.5, -0.5], tex_index: 3, tex_coords: [0.0, 1.0] }, // 2
-        VertexSkybox { position: [-0.5, -0.5, -0.5], tex_index: 3, tex_coords: [1.0, 1.0] }, // 3
-        VertexSkybox { position: [-0.5, 0.5, -0.5], tex_index: 3, tex_coords: [1.0, 0.0] }, // 7
+        VertexSkybox { position: [0.5, 0.5, -0.5], tex_index: 3, tex_coords: [1.0, 0.0] }, // 6
+        VertexSkybox { position: [0.5, -0.5, -0.5], tex_index: 3, tex_coords: [1.0, 1.0] }, // 2
+        VertexSkybox { position: [-0.5, -0.5, -0.5], tex_index: 3, tex_coords: [0.0, 1.0] }, // 3
+        VertexSkybox { position: [-0.5, 0.5, -0.5], tex_index: 3, tex_coords: [0.0, 0.0] }, // 7
 
         // Left, -x, negx
-        VertexSkybox { position: [-0.5, 0.5, -0.5], tex_index: 4, tex_coords: [0.0, 0.0] }, // 7
-        VertexSkybox { position: [-0.5, -0.5, -0.5], tex_index: 4, tex_coords: [0.0, 1.0] }, // 3
-        VertexSkybox { position: [-0.5, -0.5, 0.5], tex_index: 4, tex_coords: [1.0, 1.0] }, // 0
-        VertexSkybox { position: [-0.5, 0.5, 0.5], tex_index: 4, tex_coords: [1.0, 0.0] }, // 4
+        VertexSkybox { position: [-0.5, 0.5, -0.5], tex_index: 4, tex_coords: [1.0, 0.0] }, // 7
+        VertexSkybox { position: [-0.5, -0.5, -0.5], tex_index: 4, tex_coords: [1.0, 1.0] }, // 3
+        VertexSkybox { position: [-0.5, -0.5, 0.5], tex_index: 4, tex_coords: [0.0, 1.0] }, // 0
+        VertexSkybox { position: [-0.5, 0.5, 0.5], tex_index: 4, tex_coords: [0.0, 0.0] }, // 4
         
         // Up, +y, posy
-        VertexSkybox { position: [-0.5, 0.5, -0.5], tex_index: 5, tex_coords: [0.0, 0.0] }, // 7
-        VertexSkybox { position: [-0.5, 0.5, 0.5], tex_index: 5, tex_coords: [0.0, 1.0] }, // 4
-        VertexSkybox { position: [0.5, 0.5, 0.5], tex_index: 5, tex_coords: [1.0, 1.0] }, // 5
-        VertexSkybox { position: [0.5, 0.5, -0.5], tex_index: 5, tex_coords: [1.0, 0.0] }, // 6
+        VertexSkybox { position: [-0.5, 0.5, -0.5], tex_index: 5, tex_coords: [0.0, 1.0] }, // 7
+        VertexSkybox { position: [-0.5, 0.5, 0.5], tex_index: 5, tex_coords: [0.0, 0.0] }, // 4
+        VertexSkybox { position: [0.5, 0.5, 0.5], tex_index: 5, tex_coords: [1.0, 0.0] }, // 5
+        VertexSkybox { position: [0.5, 0.5, -0.5], tex_index: 5, tex_coords: [1.0, 1.0] }, // 6
     ];
 
     let mut indices = vec![0; 36];
@@ -135,14 +151,14 @@ pub fn create_skybox_render_pipeline(
     render_resources: &RenderResources,
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
-    shader_path: &str,
+    // shader_path: &str,
 ) -> wgpu::RenderPipeline {
     let shader_module = device.create_shader_module(
-        wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(shader_path)),
-        }
-        // wgpu::include_wgsl!(shader_path)
+        // wgpu::ShaderModuleDescriptor {
+        //     label: None,
+        //     source: wgpu::ShaderSource::Wgsl(include_str!(shader_path)),
+        // }
+        wgpu::include_wgsl!("../res/skybox.wgsl")
     );
     let shader = shader::Shader::with_final(
         shader_module,

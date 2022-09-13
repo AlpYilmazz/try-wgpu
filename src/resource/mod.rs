@@ -1,4 +1,4 @@
-use std::{ops::{Index, Deref}, marker::PhantomData};
+use std::{ops::{Index, Deref}, marker::PhantomData, borrow::Borrow};
 
 use wgpu::util::DeviceExt;
 
@@ -137,6 +137,26 @@ impl RenderResources {
         let resources = vec![
             wgpu::BindingResource::TextureView(&texture.view),
             wgpu::BindingResource::Sampler(&texture.sampler),
+        ];
+
+        let bind_group = self.just_create_bind_group(device, &layout, resources);
+        self.push_bind_group(bind_group)
+    }
+
+    pub fn create_texture_array_bind_group<const N: usize>(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &TypedBindGroupLayout<texture::TextureArray<N>>,
+        texture_array: &texture::TextureArray<N>,
+    ) -> usize {
+        // let a = texture_array.views.as_ref().iter().map(|a| a).collect::<Vec<_>>();
+        // let resources = vec![
+        //     wgpu::BindingResource::TextureViewArray(&a),
+        //     wgpu::BindingResource::Sampler(&texture_array.sampler),
+        // ];
+        let resources = vec![
+            wgpu::BindingResource::TextureView(&texture_array.view),
+            wgpu::BindingResource::Sampler(&texture_array.sampler),
         ];
 
         let bind_group = self.just_create_bind_group(device, &layout, resources);

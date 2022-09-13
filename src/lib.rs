@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 use camera::{Camera, PerspectiveProjection, CameraView, CameraUniform};
 use cgmath::*;
 use resource::{buffer::{Vertex, MeshVertex, Indices, InstanceRaw, InstanceUnit, self}, RenderResources, shader::Shader, mesh, TypedBindGroupLayout, RenderRef};
+use skybox::SkyboxModelUniform;
 use wgpu::{include_wgsl, util::DeviceExt};
 use winit::{window::Window, event::*};
 
@@ -45,6 +46,10 @@ pub struct State {
     camera_projection: PerspectiveProjection,
     camera_controller: CameraController,
     
+    skybox_model_uniform: SkyboxModelUniform,
+    skybox_model_buffer_id: usize,
+    skybox_transform: skybox::SkyboxTransform,
+
     instances: Vec<buffer::Instance>,
     instance_buffer: wgpu::Buffer,
     render_refs: Vec<(usize, Vec<RenderRef>)>,
@@ -96,7 +101,7 @@ impl State {
         let surface = unsafe { instance.create_surface(window) };
         let adapter = instance.request_adapter(
             &wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
+                power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
             }
@@ -309,6 +314,53 @@ impl State {
             }
         );
 
+        let skybox_mesh = skybox::create_skybox();
+        let skybox_mesh_id = render_resources.create_gpu_mesh(&device, &skybox_mesh);
+
+        let skybox_texture_array = texture::TextureArray::load(
+            &device, &queue, "res/skybox", skybox::SIDES, "jpg"
+        ).unwrap();
+        let texture_array_6_layout: TypedBindGroupLayout<texture::TextureArray<6>> = 
+            render_resources.just_create_bind_group_layout(&device);
+        let texture_array_6_bind_id = render_resources.create_texture_array_bind_group(
+            &device, &texture_array_6_layout, &skybox_texture_array
+        );
+
+        let skybox_transform = skybox::SkyboxTransform {
+            scale: Vector3::new(500.0, 500.0, 500.0),
+            ..Default::default()
+        };
+        let mut skybox_model_uniform = skybox::SkyboxModelUniform::default();
+        skybox_model_uniform.update(&skybox_transform);
+        let skybox_model_buffer_id = render_resources.create_uniform_buffer_init(
+            &device,
+            bytemuck::cast_slice(&[skybox_model_uniform])
+        );
+        let skybox_model_layout: TypedBindGroupLayout<SkyboxModelUniform> = 
+            render_resources.just_create_uniform_layout(&device);
+        let skybox_model_bind_id = 
+            render_resources.create_uniform_bind_group(
+                &device,
+                &skybox_model_layout,
+                skybox_model_buffer_id
+            );
+
+        let skybox_render_pipeline = skybox::create_skybox_render_pipeline(
+            &render_resources, &device, &config
+        );
+        let skybox_pipeline_id = render_resources.push_render_pipeline(skybox_render_pipeline);
+
+
+        let skybox = RenderRef {
+            pipeline: skybox_pipeline_id,
+            mesh: skybox_mesh_id,
+            bind_groups: vec![
+                texture_array_6_bind_id,
+                camera_bind_id,
+                skybox_model_bind_id,
+            ],
+        };
+
         let cube = RenderRef {
             pipeline: basic_wgsl_pipeline_id,
             mesh: cube_mesh_id,
@@ -381,6 +433,10 @@ impl State {
             camera_projection,
             camera_controller,
 
+            skybox_model_uniform,
+            skybox_model_buffer_id,
+            skybox_transform,
+
             instances,
             instance_buffer,
 
@@ -390,8 +446,14 @@ impl State {
                     vec![
                         // background,
                         // pentagon,
-                        plane,
-                        cube,
+                        // plane,
+                        // cube,
+                    ]
+                ),
+                (
+                    skybox_pipeline_id,
+                    vec![
+                        skybox,
                     ]
                 )
             ],
@@ -462,6 +524,12 @@ impl State {
         self.camera_uniform.update_view_proj(&self.camera);
         let camera_buffer = self.render_resources.buffers.get(self.camera_buffer_id).unwrap();
         self.queue.write_buffer(camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
+
+        // TODO: abstract/unite uniform_repr-uniform-buffer update
+        self.skybox_transform.translation = self.camera_view.eye.to_vec();
+        self.skybox_model_uniform.update(&self.skybox_transform);
+        let skybox_buffer = self.render_resources.buffers.get(self.skybox_model_buffer_id).unwrap();
+        self.queue.write_buffer(skybox_buffer, 0, bytemuck::cast_slice(&[self.skybox_model_uniform]));
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -538,7 +606,8 @@ impl State {
             render_pass.set_bind_group(index as u32, bind_group, &[]);
         }
         render_pass.set_vertex_buffer(0, mesh_0.vertex_buffer.slice(..));
-        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+        // TODO:
+        // render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         match &mesh_0.assembly {
             mesh::GpuMeshAssembly::Indexed {
                 index_buffer,
@@ -624,6 +693,39 @@ impl CameraController {
         }
     }
 
+    fn simple_update_camera_view(&self, camera_view: &mut CameraView) {
+        if self.is_forward_pressed {
+            let step = -Vector3::unit_z() * self.speed;
+            camera_view.eye += step;
+            camera_view.target += step;
+        }
+        if self.is_left_pressed {
+            let step = -Vector3::unit_x() * self.speed;
+            camera_view.eye += step;
+            camera_view.target += step;
+        }
+        if self.is_backward_pressed {
+            let step = Vector3::unit_z() * self.speed;
+            camera_view.eye += step;
+            camera_view.target += step;
+        }
+        if self.is_right_pressed {
+            let step = Vector3::unit_x() * self.speed;
+            camera_view.eye += step;
+            camera_view.target += step;
+        }
+        if self.is_up_pressed {
+            let step = Vector3::unit_y() * self.speed;
+            camera_view.eye += step;
+            camera_view.target += step;
+        }
+        if self.is_down_pressed {
+            let step = -Vector3::unit_y() * self.speed;
+            camera_view.eye += step;
+            camera_view.target += step;
+        }
+    }
+
     fn update_camera_view(&self, camera_view: &mut CameraView) {
         // use cgmath::InnerSpace;
         let forward = camera_view.target - camera_view.eye;
@@ -633,17 +735,25 @@ impl CameraController {
         // Prevents glitching when camera gets too close to the
         // center of the scene.
         if self.is_forward_pressed && forward_mag > self.speed {
-            camera_view.eye += forward_norm * self.speed;
+            let step = forward_norm * self.speed;
+            camera_view.eye += step;
+            camera_view.target += step;
         }
         if self.is_backward_pressed {
-            camera_view.eye -= forward_norm * self.speed;
+            let step = -forward_norm * self.speed;
+            camera_view.eye += step;
+            camera_view.target += step;
         }
 
         if self.is_up_pressed {
-            camera_view.eye += camera_view.up.normalize() * self.speed;
+            let step = Vector3::unit_y() * self.speed;
+            camera_view.eye += step;
+            camera_view.target += step;
         }
         if self.is_down_pressed {
-            camera_view.eye -= camera_view.up.normalize() * self.speed;
+            let step = -Vector3::unit_y() * self.speed;
+            camera_view.eye += step;
+            camera_view.target += step;
         }
 
         let right = forward_norm.cross(camera_view.up);
