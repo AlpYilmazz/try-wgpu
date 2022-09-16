@@ -16,6 +16,40 @@ impl Indices {
     }
 }
 
+impl Indices {
+    pub fn shift(&mut self, offset: u32) {
+        match self {
+            Indices::U16(vec) => {
+                for ind in vec {
+                    *ind += offset as u16;
+                }
+            },
+            Indices::U32(vec) => {
+                for ind in vec {
+                    *ind += offset;
+                }
+            },
+        }
+    }
+
+    pub fn extend(&mut self, other: Indices) {
+        match (self, other) {
+            (Indices::U16(vs), Indices::U16(vo)) => {
+                vs.extend(vo);
+            },
+            (Indices::U32(vs), Indices::U32(vo)) => {
+                vs.extend(vo);
+            },
+            (Indices::U16(vs), Indices::U32(vo)) => {
+                vs.extend(vo.iter().map(|a| *a as u16));
+            },
+            (Indices::U32(vs), Indices::U16(vo)) => {
+                vs.extend(vo.iter().map(|a| *a as u32));
+            },
+        }
+    }
+}
+
 impl Into<wgpu::IndexFormat> for &Indices {
     fn into(self) -> wgpu::IndexFormat {
         match self {

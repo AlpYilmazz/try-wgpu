@@ -253,6 +253,14 @@ impl<const N: usize> TextureArray<N> {
             }
         ];
 
+    // pub fn from_bytes(
+    //     device: &wgpu::Device,
+    //     queue: &wgpu::Queue,
+    //     bytes: &[u8],
+    // ) -> Self {
+
+    // }
+
     pub fn load(
         device: &wgpu::Device,
         queue: &wgpu::Queue,

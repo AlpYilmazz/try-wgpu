@@ -13,6 +13,7 @@ pub mod util;
 pub mod resource;
 pub mod camera;
 pub mod skybox;
+pub mod text;
 
 
 // NOTE:

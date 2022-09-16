@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 pollster = "0.2.5"
 tobj = "3.2.1"
+freetype-rs = "0.31.0"
 anyhow = "1.0"
 noise = "0.7.0"
 bluenoise = "0.2.1"

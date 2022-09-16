@@ -112,12 +112,16 @@ impl<V: MeshVertex> Mesh<V> {
         self.vertices = vertices;
     }
 
-    pub fn push_vertices(&mut self, vertices: impl Iterator<Item = V>) {
+    pub fn push_vertices(&mut self, vertices: impl IntoIterator<Item = V>) {
         self.vertices.extend(vertices);
     }
 
     pub fn get_indices(&self) -> Option<&Indices> {
         self.indices.as_ref()
+    }
+
+    pub fn get_indices_mut(&mut self) -> Option<&mut Indices> {
+        self.indices.as_mut()
     }
 
     pub fn set_indices(&mut self, indices: Indices) {
@@ -154,6 +158,69 @@ impl<V: MeshVertex> Mesh<V> {
     }
 }
 
+pub struct BatchMesh<V: MeshVertex> {
+    indexed: bool,
+    inner_mesh: Mesh<V>,
+}
+
+impl<V: MeshVertex> BatchMesh<V> {
+    pub fn new(
+        primitive_topology: wgpu::PrimitiveTopology,
+        indexed: bool,
+    ) -> Self {
+        Self {
+            indexed,
+            inner_mesh: Mesh::new(primitive_topology),
+        }
+    }
+
+    pub fn add(&mut self, mesh: Mesh<V>) {
+        let (vertices, indices) = (mesh.vertices, mesh.indices);
+        let offset = vertices.len() as u32;
+        
+        self.inner_mesh.push_vertices(vertices);
+        
+        match self.inner_mesh.get_indices_mut() {
+            Some(inner_indices) => {
+                match indices {
+                    Some(mut indices) => {
+                        indices.shift(offset);
+                        inner_indices.extend(indices);
+                    },
+                    // TODO: OR: may convert non-indexed into indexed
+                    // by triplet indexing
+                    None => panic!("Index requirements does not match"),
+                }
+            },
+            None => {
+                match (self.indexed, indices) {
+                    (true, Some(mut indices)) => {
+                        indices.shift(offset);
+                        self.inner_mesh.set_indices(indices);
+                    },
+                    (false, None) => {
+                        // Normal Case
+                    },
+                    // TODO: OR: may produce garbage gracefully
+                    _ => panic!("Index requirements does not match"),
+                }
+            },
+        }
+    }
+
+    pub fn add_all(&mut self, meshes: impl IntoIterator<Item = Mesh<V>>) {
+        for mesh in meshes {
+            self.add(mesh);
+        }
+    }
+}
+
+impl<'a, V: MeshVertex> Into<&'a Mesh<V>> for &'a BatchMesh<V> {
+    fn into(self) -> &'a Mesh<V> {
+        &self.inner_mesh
+    }
+}
+
 pub enum GpuMeshAssembly {
     Indexed {
         index_buffer: wgpu::Buffer,
@@ -173,10 +240,15 @@ pub struct GpuMesh {
 }
 
 impl GpuMesh {
-    pub fn from_mesh<V: MeshVertex>(
-        mesh: &Mesh<V>,
+    pub fn from_mesh<'a, V, M>(
+        mesh: M,
         device: &wgpu::Device,
-    ) -> GpuMesh {
+    ) -> GpuMesh
+    where
+        V: MeshVertex,
+        M: Into<&'a Mesh<V>>
+    {
+        let mesh: &Mesh<V> = mesh.into();
         GpuMesh {
             vertex_buffer_layout: mesh.get_vertex_buffer_layout(),
             vertex_buffer: device.create_buffer_init(
