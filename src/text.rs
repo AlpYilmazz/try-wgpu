@@ -5,6 +5,27 @@ use anyhow::*;
 use crate::texture;
 
 
+pub trait PixelBitSize {
+    fn get_size(&self) -> u32;
+}
+
+impl PixelBitSize for freetype::bitmap::PixelMode {
+    fn get_size(&self) -> u32 {
+        use freetype::bitmap::PixelMode;
+        match self {
+            PixelMode::None => 0,
+            PixelMode::Mono => 1,
+            PixelMode::Gray => 8,
+            PixelMode::Gray2 => 2,
+            PixelMode::Gray4 => 4,
+            PixelMode::Lcd => 8,
+            PixelMode::LcdV => 8,
+            PixelMode::Bgra => 32,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct GlyphRect {
     pub tl: f32,
     pub bl: f32,
@@ -22,7 +43,7 @@ impl GlyphRect {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GlyphDesc {
     linear_stride: usize,
     h: i32,
@@ -37,6 +58,7 @@ pub struct LinearTextAtlas {
     sum_pitch: usize,
     max_y_max: usize,
     max_y_min: usize,
+    pixel_mode: freetype::bitmap::PixelMode,
     descriptors: Vec<GlyphDesc>,
     bytes: Vec<u8>,
 }
@@ -52,12 +74,17 @@ impl LinearTextAtlas {
         let (mut max_y_max, mut max_y_min) = (0, 0);
 
         let mut stride = 0;
+        let mut pixel_mode = None;
         for ch in 0..COUNT {
-            face.load_char(ch, freetype::face::LoadFlag::RENDER)?;
+            face.set_char_size(30 * 64, 0, 0, 0).unwrap();
+            face.load_char(ch, freetype::face::LoadFlag::RENDER).unwrap();
             let glyph = face.glyph();
             let bitmap = glyph.bitmap();
             bytes.extend(bitmap.buffer());
-            
+
+            pixel_mode = Some(bitmap.pixel_mode().unwrap());
+            dbg!(&pixel_mode);
+
             let desc = GlyphDesc {
                 linear_stride: stride,
                 h: bitmap.rows(),
@@ -81,6 +108,7 @@ impl LinearTextAtlas {
             sum_pitch: sum_pitch as usize,
             max_y_max: max_y_max as usize,
             max_y_min: max_y_min as usize,
+            pixel_mode: pixel_mode.unwrap(),
             descriptors,
             bytes,
         })
@@ -98,16 +126,20 @@ impl LinearTextAtlas {
 pub struct TextAtlas {
     descriptors: Vec<GlyphDesc>,
     rects: Vec<GlyphRect>,
+    w: usize,
+    h: usize,
+    stride: usize,
     bytes: Vec<u8>,
 }
 
 impl TextAtlas {
+    // TODO: Bearings can be zero
     pub fn create(linear_atlas: &LinearTextAtlas) -> Self {
         const COUNT: usize = 128;
 
         let fit_w = linear_atlas.sum_pitch;
         let fit_h = linear_atlas.max_y_max + linear_atlas.max_y_min;
-        let zero = linear_atlas.max_y_max;
+        let zero = linear_atlas.max_y_max as i32;
 
         let descriptors = linear_atlas.descriptors.clone();
         let mut rects = Vec::with_capacity(descriptors.len());
@@ -118,14 +150,17 @@ impl TextAtlas {
         let mut x_start = 0;
         for ch in 0..COUNT {
             let (desc, texture) = linear_atlas.get_glyph_texture(ch);
+            dbg!(ch, desc);
             
+            // let by = desc.bearing_y as usize;
+            // dbg!(zero, by);
             let (tl, bl) = (
-                zero - desc.bearing_y as usize,
-                zero - desc.bearing_y as usize + desc.h as usize - 1,
+                zero - desc.bearing_y,
+                zero - desc.bearing_y + desc.h - 1,
             );
             let (br, tr) = (
-                tl + desc.pitch as usize - 1,
-                bl + desc.pitch as usize - 1,
+                tl + desc.pitch - 1,
+                bl + desc.pitch - 1,
             );
 
             for i in 0..desc.h as usize {
@@ -134,7 +169,7 @@ impl TextAtlas {
                 //     zero - desc.bearing_y as usize + i .. zero - desc.bearing_y as usize + (i+1),
                 //     x_start .. x_start + desc.pitch
                 // );
-                let offset_factor_2d = (tl + i) * fit_w;
+                let offset_factor_2d = (tl as usize + i) * fit_w;
                 let offset = offset_factor_2d + x_start;
                 bytes[offset .. offset + desc.pitch as usize].as_mut()
                     .clone_from_slice(&texture[desc.pitch as usize * i .. desc.pitch as usize * (i+1)]);
@@ -153,6 +188,9 @@ impl TextAtlas {
         Self {
             descriptors,
             rects,
+            h: fit_h,
+            w: fit_w / (linear_atlas.pixel_mode.get_size() / 8) as usize,
+            stride: fit_w,
             bytes,
         }
     }
@@ -166,11 +204,11 @@ pub struct FontContainer {
 impl FontContainer {
     pub fn new(
         library: freetype::Library,
-        font_path: impl AsRef<OsStr>,
+        font_path: &str,
         face_index: isize,
     ) -> Result<Self> {
-        let face = library.new_face(font_path, face_index)?;
-        let atlas = LinearTextAtlas::create(&face)?;
+        let face = library.new_face(font_path, face_index).unwrap();
+        let atlas = LinearTextAtlas::create(&face).unwrap();
         Ok(Self {
             face,
             atlas,
@@ -184,4 +222,41 @@ impl FontContainer {
 
 pub struct TextMap {
     map: HashMap<String, FontContainer>,
+}
+
+
+const FONTS_DIR: &'static str = "C:/Windows/Fonts";
+macro_rules! font_path {
+    ($font:literal) => {
+        {
+            use crate::text::FONTS_DIR;
+            const_format::concatcp!(FONTS_DIR, "/", $font)
+        }
+    };
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::{FontContainer, TextAtlas};
+
+
+    #[test]
+    fn create_atlas() {
+        let library = freetype::Library::init().unwrap();
+        let fontc = FontContainer::new(
+            library, font_path!("arial.ttf"), 0
+        ).unwrap();
+
+        let atlas = TextAtlas::create(&fontc.atlas);
+        dbg!(&atlas.descriptors[32]);
+        dbg!(&atlas.rects[32]);
+        image::save_buffer(
+            "save/text_atlas.png",
+            &atlas.bytes,
+            atlas.w as u32, atlas.h as u32,
+            image::ColorType::L8,
+        ).unwrap();
+    }
+
 }
