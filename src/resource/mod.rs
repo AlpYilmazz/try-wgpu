@@ -6,7 +6,7 @@ use crate::texture;
 
 use self::buffer::{MeshVertex, Uniform, BindGroup};
 
-
+pub mod bind;
 pub mod buffer;
 pub mod shader;
 pub mod mesh_bevy;

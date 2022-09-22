@@ -4,6 +4,19 @@ use anyhow::*;
 
 use crate::texture;
 
+pub mod mesh;
+
+
+const FONTS_DIR: &'static str = "C:/Windows/Fonts";
+macro_rules! font_path {
+    ($font:literal) => {
+        {
+            use crate::text::FONTS_DIR;
+            const_format::concatcp!(FONTS_DIR, "/", $font)
+        }
+    };
+}
+
 
 pub trait PixelBitSize {
     fn get_size(&self) -> u32;
@@ -27,25 +40,35 @@ impl PixelBitSize for freetype::bitmap::PixelMode {
 
 #[derive(Debug)]
 pub struct GlyphRect {
-    pub tl: f32,
-    pub bl: f32,
-    pub br: f32,
-    pub tr: f32,
+    pub tl: (u32, u32),
+    // pub bl: f32,
+    pub br: (u32, u32),
+    // pub tr: f32,
 }
 
 impl GlyphRect {
-    pub fn new(tl: f32, bl: f32, br: f32, tr: f32) -> Self {
-        Self { tl, bl, br, tr }
+    pub fn new(tl: (u32, u32), br: (u32, u32)) -> Self {
+        Self { tl, br }
     }
 
-    pub fn as_arr(&self) -> [f32; 4] {
-        [ self.tl, self.bl, self.br, self.tr ]
+    pub fn normalized(&self, h: u32, w: u32) -> ((f32, f32), (f32, f32)) {
+        (
+            (self.tl.0 as f32 / w as f32, self.tl.1 as f32 / h as f32),
+            (self.br.0 as f32 / w as f32, self.br.1 as f32 / h as f32)
+        )
     }
+    // pub fn new(tl: f32, bl: f32, br: f32, tr: f32) -> Self {
+    //     Self { tl, bl, br, tr }
+    // }
+
+    // pub fn as_arr(&self) -> [f32; 4] {
+    //     [ self.tl, self.bl, self.br, self.tr ]
+    // }
 }
 
 #[derive(Clone, Debug)]
 pub struct GlyphDesc {
-    linear_stride: usize,
+    x_start: usize,
     h: i32,
     w: i32,
     pitch: i32, // row stride, add this to go down one row
@@ -86,7 +109,7 @@ impl LinearTextAtlas {
             dbg!(&pixel_mode);
 
             let desc = GlyphDesc {
-                linear_stride: stride,
+                x_start: stride,
                 h: bitmap.rows(),
                 w: bitmap.width(),
                 // TODO: what if pitch is negative
@@ -116,7 +139,7 @@ impl LinearTextAtlas {
 
     pub fn get_glyph_texture(&self, ch: usize) -> (&GlyphDesc, &[u8]) {
         let desc = &self.descriptors[ch];
-        let stride = desc.linear_stride;
+        let stride = desc.x_start;
         let size = (desc.h * desc.pitch) as usize;
 
         (desc, &self.bytes[stride .. stride+size])
@@ -124,12 +147,12 @@ impl LinearTextAtlas {
 }
 
 pub struct TextAtlas {
-    descriptors: Vec<GlyphDesc>,
-    rects: Vec<GlyphRect>,
-    w: usize,
-    h: usize,
-    stride: usize,
-    bytes: Vec<u8>,
+    pub descriptors: Vec<GlyphDesc>,
+    pub rects: Vec<GlyphRect>,
+    pub w: usize,
+    pub h: usize,
+    pub stride: usize,
+    pub bytes: Vec<u8>,
 }
 
 impl TextAtlas {
@@ -145,7 +168,8 @@ impl TextAtlas {
         let mut rects = Vec::with_capacity(descriptors.len());
         let mut bytes = vec![0; fit_h * fit_w];
 
-        // bytes[zero-bearing_y..zero-bearing_y+h, x0..x1] = linear_atlas.bytes[stride..stride+size].as_2d(h, pitch);
+        // bytes[zero-bearing_y..zero-bearing_y+h, x0..x1] = 
+                // linear_atlas.bytes[stride..stride+size].as_2d(h, pitch);
 
         let mut x_start = 0;
         for ch in 0..COUNT {
@@ -154,14 +178,16 @@ impl TextAtlas {
             
             // let by = desc.bearing_y as usize;
             // dbg!(zero, by);
-            let (tl, bl) = (
-                zero - desc.bearing_y,
-                zero - desc.bearing_y + desc.h - 1,
-            );
-            let (br, tr) = (
-                tl + desc.pitch - 1,
-                bl + desc.pitch - 1,
-            );
+            // let (tl, bl) = (
+            //     zero - desc.bearing_y,
+            //     zero - desc.bearing_y + desc.h - 1,
+            // );
+            // let (br, tr) = (
+            //     tl + desc.pitch - 1,
+            //     bl + desc.pitch - 1,
+            // );
+            let tl = (x_start as u32, zero as u32 - desc.bearing_y as u32);
+            let br = (tl.0 + desc.w as u32 - 1, tl.1 + desc.h as u32 - 1);
 
             for i in 0..desc.h as usize {
                 // bytes[...] = texture[pitch*i .. pitch*(i+1)];
@@ -169,18 +195,13 @@ impl TextAtlas {
                 //     zero - desc.bearing_y as usize + i .. zero - desc.bearing_y as usize + (i+1),
                 //     x_start .. x_start + desc.pitch
                 // );
-                let offset_factor_2d = (tl as usize + i) * fit_w;
+                let offset_factor_2d = (tl.1 as usize + i) * fit_w;
                 let offset = offset_factor_2d + x_start;
                 bytes[offset .. offset + desc.pitch as usize].as_mut()
                     .clone_from_slice(&texture[desc.pitch as usize * i .. desc.pitch as usize * (i+1)]);
             }
 
-            rects.push(GlyphRect {
-                tl: tl as f32,
-                bl: bl as f32,
-                br: br as f32,
-                tr: tr as f32,
-            });
+            rects.push(GlyphRect::new(tl, br));
 
             x_start += desc.pitch as usize;
         }
@@ -198,41 +219,53 @@ impl TextAtlas {
 
 pub struct FontContainer {
     face: freetype::face::Face,
-    atlas: LinearTextAtlas,
+    linear_atlas: LinearTextAtlas,
+    pub atlas: TextAtlas,
 }
 
 impl FontContainer {
     pub fn new(
-        library: freetype::Library,
+        library: &freetype::Library,
         font_path: &str,
         face_index: isize,
     ) -> Result<Self> {
         let face = library.new_face(font_path, face_index).unwrap();
-        let atlas = LinearTextAtlas::create(&face).unwrap();
+        let linear_atlas = LinearTextAtlas::create(&face).unwrap();
+        let atlas = TextAtlas::create(&linear_atlas);
         Ok(Self {
             face,
+            linear_atlas,
             atlas,
         })
     }
 
     pub fn get_glyph_texture(&self, ch: usize) -> (&GlyphDesc, &[u8]) {
-        self.atlas.get_glyph_texture(ch)
+        self.linear_atlas.get_glyph_texture(ch)
     }
 }
 
 pub struct TextMap {
-    map: HashMap<String, FontContainer>,
+    library: freetype::Library,
+    pub fonts: HashMap<String, FontContainer>,
 }
 
-
-const FONTS_DIR: &'static str = "C:/Windows/Fonts";
-macro_rules! font_path {
-    ($font:literal) => {
-        {
-            use crate::text::FONTS_DIR;
-            const_format::concatcp!(FONTS_DIR, "/", $font)
+impl TextMap {
+    pub fn new() -> Self {
+        Self {
+            library: freetype::Library::init().unwrap(),
+            fonts: Default::default(),
         }
-    };
+    }
+
+    pub fn generate_from_path(&mut self, font: String, path: &str, face_index: isize) -> Result<()> {
+        self.fonts.insert(font, FontContainer::new(&self.library, path, face_index)?);
+        Ok(())
+    }
+
+    pub fn generate(&mut self, font: String, face_index: isize) -> Result<()> {
+        let path = format!("{}/{}", FONTS_DIR, &font);
+        self.generate_from_path(font, &path, face_index)
+    }
 }
 
 
@@ -245,10 +278,10 @@ mod tests {
     fn create_atlas() {
         let library = freetype::Library::init().unwrap();
         let fontc = FontContainer::new(
-            library, font_path!("arial.ttf"), 0
+            &library, font_path!("arial.ttf"), 0
         ).unwrap();
 
-        let atlas = TextAtlas::create(&fontc.atlas);
+        let atlas = TextAtlas::create(&fontc.linear_atlas);
         dbg!(&atlas.descriptors[32]);
         dbg!(&atlas.rects[32]);
         image::save_buffer(

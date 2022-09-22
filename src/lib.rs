@@ -205,11 +205,11 @@ impl State {
 
         let basic_wgsl = device.create_shader_module(include_wgsl!("../res/basic.wgsl"));
         let basic_wgsl_pipeline_id = render_resources.create_render_pipeline(
-            &device, 
+            &device,
             &[
                 &texture_layout,
                 &camera_layout,
-            ], 
+            ],
             &Shader::with_final(
                 basic_wgsl,
                 vec![Vertex::layout(), InstanceRaw::layout()],
@@ -218,7 +218,7 @@ impl State {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })]
-            ), 
+            ),
             wgpu::PrimitiveTopology::TriangleList
         );
 
@@ -350,7 +350,76 @@ impl State {
             &render_resources, &device, &config
         );
         let skybox_pipeline_id = render_resources.push_render_pipeline(skybox_render_pipeline);
+  
+        let font_arial = String::from("arial.ttf");
+        let mut text_map = text::TextMap::new();
+        text_map.generate(font_arial.clone(), 0).unwrap();
+        
+        let arial_fontc = text_map.fonts.get(&font_arial).unwrap();
+        let arial_font_tex_bytes = &arial_fontc.atlas.bytes;
+        let arial_font_atlas_texture = texture::Texture::from_raw_image(
+            &device, &queue,
+            &texture::RawImage::new( 
+                arial_font_tex_bytes,
+                (arial_fontc.atlas.h as u32, arial_fontc.atlas.w as u32),
+                texture::PixelFormat::G8,
+            ),
+            None,
+        ).unwrap();
+        let arial_font_atlas_bind_id = render_resources.create_texture_bind_group(
+            &device,
+            &texture_layout,
+            &arial_font_atlas_texture
+        );
 
+        let text_hello_mesh = text::mesh::create_screen_text_mesh(
+            &arial_fontc.atlas,
+            "Hello, World!",
+            (0.0, 0.0),
+        );
+        let text_hello_mesh_id = render_resources.create_gpu_mesh(&device, &text_hello_mesh);
+
+        let mut camera_ortho_uniform = CameraUniform::default();
+        let camera_ortho_buffer_id = render_resources.create_uniform_buffer_init(
+            &device,
+            bytemuck::cast_slice(&[camera_ortho_uniform])
+        );
+        let camera_ortho_bind_id = 
+            render_resources.create_uniform_bind_group(
+                &device,
+                &camera_layout,
+                camera_ortho_buffer_id
+            );
+
+        let text_wgsl = device.create_shader_module(include_wgsl!("../res/text.wgsl"));
+        let text_render_pipeline = render_resources.create_render_pipeline(
+            &device,
+            &[
+                &texture_layout,
+                &camera_layout,
+            ],
+            &Shader::with_final(
+                text_wgsl,
+                vec![Vertex::layout()],
+                vec![Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })]
+            ),
+            wgpu::PrimitiveTopology::TriangleList,
+        );
+
+
+        let text_hello = RenderRef {
+            pipeline: text_render_pipeline,
+            mesh: text_hello_mesh_id,
+            bind_groups: vec![
+                arial_font_atlas_bind_id,
+                camera_ortho_bind_id,
+                // text_model_bind_id,
+            ],
+        };
 
         let skybox = RenderRef {
             pipeline: skybox_pipeline_id,
