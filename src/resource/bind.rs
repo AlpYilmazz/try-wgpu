@@ -43,71 +43,33 @@ pub trait AsBindingSet<'a> {
 
     fn as_binding_set(&'a self) -> Self::Set;
 }
+pub trait IntoBindingSet {
+    type Set: BindingSet;
 
-#[allow(non_snake_case)]
-impl<B0> BindingSet for (&B0,)
-where
-B0: Binding,
-{
-    fn layout_desc(&self) -> BindingSetLayoutDescriptor {
-        let (B0,) = *self;
+    fn into_binding_set(self) -> Self::Set;
+}
+impl<T: BindingSet> IntoBindingSet for T {
+    type Set = T;
 
-        BindingSetLayoutDescriptor {
-            entries: vec![
-                B0.get_layout_entry().with_binding(0),
-            ],
-        }
-    }
-
-    fn into_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
-        let (B0,) = *self;
-
-        let bs_layout = self.layout_desc();
-
-        let bind_group_layout = device.create_bind_group_layout(
-            &wgpu::BindGroupLayoutDescriptor {
-                label: None,
-                entries: &bs_layout.entries,
-            }
-        );
-        
-        let bind_group = device.create_bind_group(
-            &wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: B0.get_resource(),
-                    },
-                ],
-            }
-        );
-
-        bind_group
+    fn into_binding_set(self) -> Self::Set {
+        self
     }
 }
 
 #[allow(non_snake_case)]
-impl<B0, B1> BindingSet for (&B0, &B1,)
+impl<B0> BindingSet for &B0
 where
-    B0: Binding,
-    B1: Binding,
+B0: Binding,
 {
     fn layout_desc(&self) -> BindingSetLayoutDescriptor {
-        let (B0, B1,) = *self;
-
         BindingSetLayoutDescriptor {
             entries: vec![
-                B0.get_layout_entry().with_binding(0),
-                B1.get_layout_entry().with_binding(1),
+                self.get_layout_entry().with_binding(0),
             ],
         }
     }
 
     fn into_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
-        let (B0, B1,) = *self;
-
         let bs_layout = self.layout_desc();
 
         let bind_group_layout = device.create_bind_group_layout(
@@ -124,12 +86,8 @@ where
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: B0.get_resource(),
+                        resource: self.get_resource(),
                     },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: B1.get_resource(),
-                    }
                 ],
             }
         );
@@ -139,7 +97,10 @@ where
 }
 
 pub trait GpuUniform: C + Pod + Zeroable {
+}
 
+pub trait StageLockedUniform: GpuUniform {    
+    const FORCE_STAGE: wgpu::ShaderStages;
 }
 
 pub trait UpdateGpuUniform {
@@ -161,9 +122,9 @@ impl<H> Uniform<H>
 where
     H: UpdateGpuUniform,
 {
-    pub fn new(device: &wgpu::Device, gpu_uniform: H::GU) -> Self {
+    pub fn new(device: &wgpu::Device, stage: wgpu::ShaderStages, gpu_uniform: H::GU) -> Self {
         let buffer = 
-            UniformBuffer::new_init(device, gpu_uniform);
+            UniformBuffer::new_init_at(device, stage, gpu_uniform);
         Self {
             gpu_uniform,
             buffer,
@@ -181,8 +142,8 @@ where
     H: UpdateGpuUniform,
     H::GU: Default
 {
-    pub fn new_default(device: &wgpu::Device) -> Self {
-        Self::new(device, H::GU::default())
+    pub fn new_default(device: &wgpu::Device, stage: wgpu::ShaderStages) -> Self {
+        Self::new(device, stage, H::GU::default())
     }
 }
 
@@ -200,13 +161,14 @@ where
 }
 
 pub struct UniformBuffer<T: GpuUniform> {
+    stage: wgpu::ShaderStages,
     buffer: wgpu::Buffer,
     _marker: PhantomData<T>
 }
 
 impl<T: GpuUniform> UniformBuffer<T> {
-    pub fn new_init(device: &wgpu::Device, init: T, ) -> Self {
-        let buffer1 = device.create_buffer_init(
+    pub fn new_init_at(device: &wgpu::Device, stage: wgpu::ShaderStages, init: T) -> Self {
+        let buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: None,
                 contents: bytemuck::cast_slice(&[init]),
@@ -214,7 +176,8 @@ impl<T: GpuUniform> UniformBuffer<T> {
             }
         );
         Self {
-            buffer: buffer1,
+            stage,
+            buffer,
             _marker: PhantomData,
         }
     }
@@ -224,10 +187,27 @@ impl<T: GpuUniform> UniformBuffer<T> {
     }
 }
 
+impl<T: StageLockedUniform> UniformBuffer<T> {
+    pub fn new_init(device: &wgpu::Device, init: T) -> Self {
+        let buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&[init]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        Self {
+            stage: T::FORCE_STAGE,
+            buffer,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<T: GpuUniform> Binding for UniformBuffer<T> {
     fn get_layout_entry(&self) -> BindingLayoutEntry {
         BindingLayoutEntry {
-            visibility: wgpu::ShaderStages::VERTEX,
+            visibility: self.stage,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
@@ -242,56 +222,12 @@ impl<T: GpuUniform> Binding for UniformBuffer<T> {
     }
 }
 
-pub struct Texture {
-    pub texture: wgpu::Texture,
-    pub view: wgpu::TextureView,
-    pub sampler: wgpu::Sampler,
-}
-
-impl Binding for wgpu::TextureView {
-    fn get_layout_entry(&self) -> BindingLayoutEntry {
-        BindingLayoutEntry {
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }
-    }
-
-    fn get_resource<'a>(&'a self) -> wgpu::BindingResource<'a> {
-        wgpu::BindingResource::TextureView(self)
-    }
-}
-
-impl Binding for wgpu::Sampler {
-    fn get_layout_entry(&self) -> BindingLayoutEntry {
-        BindingLayoutEntry {
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            count: None,
-        }
-    }
-
-    fn get_resource<'a>(&'a self) -> wgpu::BindingResource<'a> {
-        wgpu::BindingResource::Sampler(self)
-    }
-}
-
-impl<'a> AsBindingSet<'a> for Texture {
-    type Set = (&'a wgpu::TextureView, &'a wgpu::Sampler);
-
-    fn as_binding_set(&'a self) -> Self::Set {
-        (&self.view, &self.sampler)
-    }
-}
-
 
 #[cfg(test)]
 mod tests {
     use cgmath::*;
+
+    use crate::texture::Texture;
 
     use super::*;
 
@@ -321,6 +257,9 @@ mod tests {
         pub view_proj: [[f32; 4]; 4],
     }
     impl GpuUniform for CameraUniform {}
+    impl StageLockedUniform for CameraUniform {
+        const FORCE_STAGE: wgpu::ShaderStages = wgpu::ShaderStages::VERTEX;
+    }
     impl Default for CameraUniform {
         fn default() -> Self {
             Self {
@@ -361,6 +300,9 @@ mod tests {
         pub model: [[f32; 4]; 4],
     }
     impl GpuUniform for ModelUniform {}
+    impl StageLockedUniform for ModelUniform {
+        const FORCE_STAGE: wgpu::ShaderStages = wgpu::ShaderStages::VERTEX;
+    }
     impl Default for ModelUniform {
         fn default() -> Self {
             Self {
@@ -369,35 +311,200 @@ mod tests {
         }
     }
 
+    pub struct Color {
+        pub r: f32,
+        pub g: f32,
+        pub b: f32,
+        pub a: f32,
+    }
+    impl Color {
+        pub fn from_tuple((r, g, b, a): (f32, f32, f32, f32)) -> Self {
+            Self { r, g, b, a }
+        }
+
+        pub fn as_tuple(&self) -> (f32, f32, f32, f32) {
+            (self.r, self.g, self.b, self.a)
+        }
+    }
+    impl UpdateGpuUniform for Color {
+        type GU = ColorUniform;
+
+        fn update_uniform(&self, gpu_uniform: &mut Self::GU) {
+            gpu_uniform.color = [self.r, self.g, self.b, self.a];
+        }
+    }
+    impl Default for Color {
+        fn default() -> Self {
+            Self::from_tuple((0.0, 0.0, 0.0, 1.0))
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, C, Pod, Zeroable)]
+    pub struct ColorUniform {
+        pub color: [f32; 4],
+    }
+    impl GpuUniform for ColorUniform {}
+    impl Default for ColorUniform {
+        fn default() -> Self {
+            Self {
+                color: [0.0, 0.0, 0.0, 1.0],
+            }
+        }
+    }
+
+
     fn uniform_usage(device: &wgpu::Device, queue: &wgpu::Queue) {
         // Create high level reprs of uniforms
         let camera = Camera::default();
         let transform = Transform::default();
+        let color = Color::from_tuple((0.5, 0.5, 0.0, 1.0));
 
         // Create uniforms
-        let mut camera_uniform: Uniform<Camera> = Uniform::new_default(device);
-        let mut model_transform_uniform: Uniform<Transform> = Uniform::new_default(device);
+        let mut camera_uniform: Uniform<Camera> = Uniform::new_default(device, wgpu::ShaderStages::VERTEX);
+        let mut model_transform_uniform: Uniform<Transform> = Uniform::new_default(device, wgpu::ShaderStages::VERTEX);
+        let mut color_uniform: Uniform<Color> = Uniform::new_default(device, wgpu::ShaderStages::FRAGMENT);
 
         // Update uniforms
         camera.update_uniform(&mut camera_uniform.gpu_uniform);
         transform.update_uniform(&mut model_transform_uniform.gpu_uniform);
+        color.update_uniform(&mut color_uniform.gpu_uniform);
 
         // Sync Gpu buffers with uniform updates
         camera_uniform.sync_buffer(queue);
         model_transform_uniform.sync_buffer(queue);
+        color_uniform.sync_buffer(queue);
 
         // Create BindingSet
         let mvp_binding_set = (
             &camera_uniform,
             &model_transform_uniform,
         );
+        let color_binding_set = &color_uniform;
+        let texture = Texture::test_new();
 
         // BindingSet into BindGroup
         let mvp_layout_debug = mvp_binding_set.layout_desc();
         let mvp_bind_group = mvp_binding_set.into_bind_group(device);
+        let color_bind_group = color_binding_set.into_bind_group(device);
+        let texture_bind_group = 
+            // texture
+            // .as_binding_set()
+            texture
+            .into_binding_set()
+            .into_bind_group(device);
 
+        // Debug
         dbg!(mvp_layout_debug);
         dbg!(mvp_bind_group);
+        dbg!(color_bind_group);
+        dbg!(texture_bind_group);
     }
 
 }
+
+macro_rules! impl_binding_set_tuple {
+    ($(($ind: literal,$param: ident)),*) => {
+        #[allow(non_snake_case)]
+        impl<$($param: Binding),*> BindingSet for ($(&$param,)*) {
+            fn layout_desc(&self) -> BindingSetLayoutDescriptor {
+                let ($($param,)*) = *self;
+        
+                BindingSetLayoutDescriptor {
+                    entries: vec![
+                        $(
+                            $param.get_layout_entry().with_binding($ind),
+                        )*
+                    ],
+                }
+            }
+        
+            fn into_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
+                let ($($param,)*) = *self;
+        
+                let bs_layout = self.layout_desc();
+        
+                let bind_group_layout = device.create_bind_group_layout(
+                    &wgpu::BindGroupLayoutDescriptor {
+                        label: None,
+                        entries: &bs_layout.entries,
+                    }
+                );
+                
+                let bind_group = device.create_bind_group(
+                    &wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout: &bind_group_layout,
+                        entries: &[
+                            $(
+                                wgpu::BindGroupEntry {
+                                    binding: $ind,
+                                    resource: $param.get_resource(),
+                                },
+                            )*
+                        ],
+                    }
+                );
+        
+                bind_group
+            }
+        }
+    };
+}
+
+impl_binding_set_tuple!((0,B0));
+impl_binding_set_tuple!((0,B0),(1,B1));
+impl_binding_set_tuple!((0,B0),(1,B1),(2,B2));
+impl_binding_set_tuple!((0,B0),(1,B1),(2,B2),(3,B3));
+impl_binding_set_tuple!((0,B0),(1,B1),(2,B2),(3,B3),(4,B4));
+impl_binding_set_tuple!((0,B0),(1,B1),(2,B2),(3,B3),(4,B4),(5,B5));
+
+// #[allow(non_snake_case)]
+// impl<B0, B1> BindingSet for (&B0, &B1,)
+// where
+//     B0: Binding,
+//     B1: Binding,
+// {
+//     fn layout_desc(&self) -> BindingSetLayoutDescriptor {
+//         let (B0, B1,) = *self;
+
+//         BindingSetLayoutDescriptor {
+//             entries: vec![
+//                 B0.get_layout_entry().with_binding(0),
+//                 B1.get_layout_entry().with_binding(1),
+//             ],
+//         }
+//     }
+
+//     fn into_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
+//         let (B0, B1,) = *self;
+
+//         let bs_layout = self.layout_desc();
+
+//         let bind_group_layout = device.create_bind_group_layout(
+//             &wgpu::BindGroupLayoutDescriptor {
+//                 label: None,
+//                 entries: &bs_layout.entries,
+//             }
+//         );
+        
+//         let bind_group = device.create_bind_group(
+//             &wgpu::BindGroupDescriptor {
+//                 label: None,
+//                 layout: &bind_group_layout,
+//                 entries: &[
+//                     wgpu::BindGroupEntry {
+//                         binding: 0,
+//                         resource: B0.get_resource(),
+//                     },
+//                     wgpu::BindGroupEntry {
+//                         binding: 1,
+//                         resource: B1.get_resource(),
+//                     }
+//                 ],
+//             }
+//         );
+
+//         bind_group
+//     }
+// }

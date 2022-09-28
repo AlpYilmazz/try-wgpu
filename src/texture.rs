@@ -1,9 +1,8 @@
-use std::{fs::File, io::BufReader, convert::TryInto, path::Path};
-
 use image::GenericImageView;
 use anyhow::*;
 
-use crate::resource::buffer::BindGroup;
+use crate::resource::bind::{Binding, BindingLayoutEntry, AsBindingSet, IntoBindingSet};
+
 
 pub enum PixelFormat {
     G8, RGBA8
@@ -61,25 +60,9 @@ pub struct Texture {
 }
 
 impl Texture {
-    const ENTRIES: &'static [wgpu::BindGroupLayoutEntry] = 
-        &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            }
-        ];
+    pub fn test_new() -> Self {
+        todo!()
+    }
 
     pub fn from_bytes(
         device: &wgpu::Device,
@@ -207,163 +190,49 @@ impl Texture {
     }
 }
 
-impl BindGroup for Texture {
-    fn layout_desc() -> wgpu::BindGroupLayoutDescriptor<'static> {
-        wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &Self::ENTRIES,
+impl Binding for wgpu::TextureView {
+    fn get_layout_entry(&self) -> BindingLayoutEntry {
+        BindingLayoutEntry {
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
         }
+    }
+
+    fn get_resource<'a>(&'a self) -> wgpu::BindingResource<'a> {
+        wgpu::BindingResource::TextureView(self)
     }
 }
 
+impl Binding for wgpu::Sampler {
+    fn get_layout_entry(&self) -> BindingLayoutEntry {
+        BindingLayoutEntry {
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        }
+    }
 
-fn open_img(path: impl AsRef<Path>) -> image::DynamicImage {
-    let file = File::open(path).unwrap();
-    let img = image::load(BufReader::new(file), image::ImageFormat::Jpeg).unwrap();
-
-    img
-}
-
-
-pub struct TextureArray<const N: usize> {
-    // pub textures: [wgpu::Texture; N],
-    pub texture: wgpu::Texture,
-    pub view: wgpu::TextureView,
-    pub sampler: wgpu::Sampler,
-}
-
-impl<const N: usize> TextureArray<N> {
-    const ENTRIES: &'static [wgpu::BindGroupLayoutEntry] = 
-        &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
-                    multisampled: false,
-                },
-                count: std::num::NonZeroU32::new(N as u32),
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            }
-        ];
-
-    // pub fn from_bytes(
-    //     device: &wgpu::Device,
-    //     queue: &wgpu::Queue,
-    //     bytes: &[u8],
-    // ) -> Self {
-
-    // }
-
-    pub fn load(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        dir: &str,
-        names: [&str; N],
-        ext: &str,
-    ) -> Result<Self> {
-        assert_ne!(N, 0);
-
-        let imgs = names.iter()
-        .map(|name| {
-                let img = open_img(format!("{}/{}.{}", dir, name, ext));
-                (img.dimensions(), img.to_rgba8())
-            })
-            .collect::<Vec<_>>();
-        
-        let raw_imgs = imgs.iter()
-            .map(|(dim, rgba)| {
-                RawImage::new(&rgba, *dim, PixelFormat::RGBA8)
-            })
-            .collect::<Vec<_>>();
-
-        let bytes = raw_imgs.iter()
-        .flat_map(|r| r.bytes)
-        .map(|a| *a)
-        .collect::<Vec<_>>();
-        
-        let raw_img_0 = &raw_imgs[0];
-
-        let texture_array_size = wgpu::Extent3d {
-            width: raw_img_0.dim.0,
-            height: raw_img_0.dim.1,
-            depth_or_array_layers: N as u32,
-        };
-        dbg!(texture_array_size);
-
-        // TODO: `texture` is going to hold all textures
-        let texture = device.create_texture(
-            &wgpu::TextureDescriptor {
-                label: None,
-                size: texture_array_size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: (&raw_img_0.pixel_format).into(),
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            }
-        );
-        
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &bytes,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: std::num::NonZeroU32::new(raw_img_0.bytes_per_row()), // RGBA Specific
-                rows_per_image: std::num::NonZeroU32::new(raw_img_0.dim.1),
-            },
-            texture_array_size
-        );        
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            base_array_layer: 0,
-            array_layer_count: std::num::NonZeroU32::new(N as u32),
-            ..Default::default()
-        });
-
-        let sampler = device.create_sampler(
-            &wgpu::SamplerDescriptor {
-                // label,
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                address_mode_w: wgpu::AddressMode::Repeat,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Nearest,
-                mipmap_filter: wgpu::FilterMode::Nearest,
-                ..Default::default()
-                // lod_min_clamp,
-                // lod_max_clamp,
-                // compare,
-                // anisotropy_clamp,
-                // border_color,
-            }
-        );
-
-        Ok(Self {
-            texture,
-            view,
-            sampler,
-        })
+    fn get_resource<'a>(&'a self) -> wgpu::BindingResource<'a> {
+        wgpu::BindingResource::Sampler(self)
     }
 }
 
-impl<const N: usize> BindGroup for TextureArray<N> {
-    fn layout_desc() -> wgpu::BindGroupLayoutDescriptor<'static> {
-        wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &Self::ENTRIES,
-        }
+impl<'a> AsBindingSet<'a> for Texture {
+    type Set = (&'a wgpu::TextureView, &'a wgpu::Sampler);
+
+    fn as_binding_set(&'a self) -> Self::Set {
+        (&self.view, &self.sampler)
+    }
+}
+impl<'a> IntoBindingSet for &'a Texture {
+    type Set = (&'a wgpu::TextureView, &'a wgpu::Sampler);
+
+    fn into_binding_set(self) -> Self::Set {
+        (&self.view, &self.sampler)
     }
 }

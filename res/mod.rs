@@ -2,6 +2,8 @@ use std::{ops::{Index, Deref}, marker::PhantomData};
 
 use wgpu::util::DeviceExt;
 
+use crate::legacy::texture;
+
 use self::buffer::{MeshVertex, Uniform, BindGroup};
 
 pub mod bind;
@@ -38,6 +40,7 @@ pub struct RenderResources {
     pub render_pipelines: Vec<wgpu::RenderPipeline>,
     pub meshes: Vec<mesh::GpuMesh>,
     pub bind_groups: Vec<wgpu::BindGroup>,
+    pub buffers: Vec<wgpu::Buffer>,
 }
 
 impl RenderResources {
@@ -87,6 +90,99 @@ impl RenderResources {
         );
 
         bind_group
+    }
+
+    pub fn just_create_bind_group_layout<B: BindGroup>(&self, device: &wgpu::Device) -> TypedBindGroupLayout<B> {
+        TypedBindGroupLayout::hold(device.create_bind_group_layout(
+            &B::layout_desc()
+        ))
+    }
+
+    pub fn just_create_uniform_layout<U: Uniform>(&self, device: &wgpu::Device) -> TypedBindGroupLayout<U> {
+        TypedBindGroupLayout::hold(device.create_bind_group_layout(
+            &U::layout_desc()
+        ))
+    }
+
+    pub fn create_uniform_bind_group<U>
+    (
+        &mut self,
+        device: &wgpu::Device,
+        layout: &TypedBindGroupLayout<U>,
+        uniform_buffer_id: usize,
+    ) -> usize
+    where
+        U: Uniform
+    {
+        let resources = vec![
+            self.buffers.get(uniform_buffer_id).unwrap().as_entire_binding(),
+        ];
+
+        let bind_group = self.just_create_bind_group(device, &layout, resources);
+        self.push_bind_group(bind_group)
+    }
+
+    pub fn just_create_texture_layout(&self, device: &wgpu::Device) -> TypedBindGroupLayout<texture::Texture> {
+        TypedBindGroupLayout::hold(device.create_bind_group_layout(
+            &texture::Texture::layout_desc()
+        ))
+    }
+
+    pub fn create_texture_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &TypedBindGroupLayout<texture::Texture>,
+        texture: &texture::Texture,
+    ) -> usize {
+        let resources = vec![
+            wgpu::BindingResource::TextureView(&texture.view),
+            wgpu::BindingResource::Sampler(&texture.sampler),
+        ];
+
+        let bind_group = self.just_create_bind_group(device, &layout, resources);
+        self.push_bind_group(bind_group)
+    }
+
+    pub fn create_texture_array_bind_group<const N: usize>(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &TypedBindGroupLayout<texture::TextureArray<N>>,
+        texture_array: &texture::TextureArray<N>,
+    ) -> usize {
+        // let a = texture_array.views.as_ref().iter().map(|a| a).collect::<Vec<_>>();
+        // let resources = vec![
+        //     wgpu::BindingResource::TextureViewArray(&a),
+        //     wgpu::BindingResource::Sampler(&texture_array.sampler),
+        // ];
+        let resources = vec![
+            wgpu::BindingResource::TextureView(&texture_array.view),
+            wgpu::BindingResource::Sampler(&texture_array.sampler),
+        ];
+
+        let bind_group = self.just_create_bind_group(device, &layout, resources);
+        self.push_bind_group(bind_group)
+    }
+
+    pub fn push_buffer(
+        &mut self,
+        buffer: wgpu::Buffer,
+    ) -> usize {
+        self.buffers.push(buffer);
+        self.buffers.len() - 1
+    }
+
+    pub fn create_uniform_buffer_init(
+        &mut self,
+        device: &wgpu::Device,
+        contents: &[u8],
+    ) -> usize {
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        self.push_buffer(uniform_buffer)
     }
 
     pub fn push_render_pipeline(
@@ -139,7 +235,7 @@ impl RenderResources {
                     conservative: false,
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,// texture::Texture::DEPTH_FORMAT,
+                    format: texture::Texture::DEPTH_FORMAT,
                     depth_write_enabled: true,
                     depth_compare: wgpu::CompareFunction::Less, // 1.
                     stencil: wgpu::StencilState::default(), // 2.

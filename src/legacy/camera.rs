@@ -1,43 +1,54 @@
-use bytemuck::{Pod, Zeroable};
 use cgmath::*;
-use repr_trait::C;
 
-use crate::resource::bind::{UpdateGpuUniform, GpuUniform, StageLockedUniform};
+use crate::resource::buffer::Uniform;
 
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CameraUniform {
+    pub view_proj: [[f32; 4]; 4],
+}
+
+impl CameraUniform {
+    pub fn update_view_proj(&mut self, camera: &Camera) {
+        self.view_proj = (OPENGL_TO_WGPU_MATRIX * camera.projection_matrix * camera.view_matrix).into();
+    }
+}
+
+impl Default for CameraUniform {
+    fn default() -> Self {
+        Self {
+            view_proj: Matrix4::identity().into(),
+        }
+    }
+}
+
+impl Uniform for CameraUniform {
+    const ENTRIES: &'static [wgpu::BindGroupLayoutEntry] = 
+        &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }
+        ];
+}
 
 pub struct Camera {
     pub view_matrix: Matrix4<f32>,
     pub projection_matrix: Matrix4<f32>,
 }
-impl UpdateGpuUniform for Camera {
-    type GU = CameraUniform;
 
-    fn update_uniform(&self, gpu_uniform: &mut Self::GU) {
-        gpu_uniform.view_proj = (self.projection_matrix * self.view_matrix).into();
-    }
-}
-impl Default for Camera {
-    fn default() -> Self {
+impl Camera {
+    pub fn new() -> Self {
         Self {
             view_matrix: Matrix4::identity(),
             projection_matrix: Matrix4::identity(),
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, C, Pod, Zeroable)]
-pub struct CameraUniform {
-    pub view_proj: [[f32; 4]; 4],
-}
-impl GpuUniform for CameraUniform {}
-impl StageLockedUniform for CameraUniform {
-    const FORCE_STAGE: wgpu::ShaderStages = wgpu::ShaderStages::VERTEX;
-}
-impl Default for CameraUniform {
-    fn default() -> Self {
-        Self {
-            view_proj: Matrix4::identity().into(),
         }
     }
 }
@@ -63,7 +74,7 @@ impl Default for CameraView {
             // have it look at the origin
             target: (0.0, 0.0, 0.0).into(),
             // which way is "up"
-            up: Vector3::unit_y(),
+            up: cgmath::Vector3::unit_y(),
         }
     }
 }

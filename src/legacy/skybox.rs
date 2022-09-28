@@ -1,7 +1,9 @@
 use bytemuck::{Pod, Zeroable};
 use cgmath::{Vector3, Matrix4, SquareMatrix, Zero};
 
-use crate::{resource::{buffer::{MeshVertex, Uniform, Indices}, shader, RenderResources, TypedBindGroupLayout, mesh::Mesh}, camera::CameraUniform, texture};
+use crate::{resource::{buffer::{MeshVertex, Uniform, Indices}, shader, RenderResources, TypedBindGroupLayout, mesh::Mesh}};
+
+use crate::legacy::{texture, camera::CameraUniform};
 
 
 #[repr(C)]
@@ -153,83 +155,84 @@ pub fn create_skybox_render_pipeline(
     config: &wgpu::SurfaceConfiguration,
     // shader_path: &str,
 ) -> wgpu::RenderPipeline {
-    let shader_module = device.create_shader_module(
-        // wgpu::ShaderModuleDescriptor {
-        //     label: None,
-        //     source: wgpu::ShaderSource::Wgsl(include_str!(shader_path)),
-        // }
-        wgpu::include_wgsl!("../res/skybox.wgsl")
-    );
-    let shader = shader::Shader::with_final(
-        shader_module,
-        vec![VertexSkybox::layout()],
-        vec![Some(wgpu::ColorTargetState {
-            format: config.format,
-            blend: Some(wgpu::BlendState::REPLACE),
-            write_mask: wgpu::ColorWrites::ALL,
-        })]
-    );
+    todo!()
+    // let shader_module = device.create_shader_module(
+    //     // wgpu::ShaderModuleDescriptor {
+    //     //     label: None,
+    //     //     source: wgpu::ShaderSource::Wgsl(include_str!(shader_path)),
+    //     // }
+    //     wgpu::include_wgsl!("../../res/skybox.wgsl")
+    // );
+    // let shader = shader::Shader::with_final(
+    //     shader_module,
+    //     vec![VertexSkybox::layout()],
+    //     vec![Some(wgpu::ColorTargetState {
+    //         format: config.format,
+    //         blend: Some(wgpu::BlendState::REPLACE),
+    //         write_mask: wgpu::ColorWrites::ALL,
+    //     })]
+    // );
 
-    let texture_array_layout: TypedBindGroupLayout<texture::TextureArray<6>> = 
-        render_resources.just_create_bind_group_layout(device);
-    let camera_layout: TypedBindGroupLayout<CameraUniform> = 
-        render_resources.just_create_uniform_layout(device);
-    let model_matrix_layout: TypedBindGroupLayout<SkyboxModelUniform> = 
-        render_resources.just_create_uniform_layout(device);
+    // let texture_array_layout: TypedBindGroupLayout<texture::TextureArray<6>> = 
+    //     render_resources.just_create_bind_group_layout(device);
+    // let camera_layout: TypedBindGroupLayout<CameraUniform> = 
+    //     render_resources.just_create_uniform_layout(device);
+    // let model_matrix_layout: TypedBindGroupLayout<SkyboxModelUniform> = 
+    //     render_resources.just_create_uniform_layout(device);
 
-    let render_pipeline_layout = device.create_pipeline_layout(
-        &wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[
-                &texture_array_layout,
-                &camera_layout,
-                &model_matrix_layout,
-            ],
-            push_constant_ranges: &[],
-        }
-    );
-    let render_pipeline = device.create_render_pipeline(
-        &wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader.module,
-                entry_point: shader::Shader::VERTEX_ENTRY_POINT,
-                buffers: &shader.vertex_buffers,
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader.module,
-                entry_point: shader::Shader::FRAGMENT_ENTRY_POINT,
-                targets: &shader.fragment_targets,
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                // Setting this to anything other than Fill requires
-                // Features::NON_FILL_POLYGON_MODE
-                polygon_mode: wgpu::PolygonMode::Fill,
-                // Requires Features::DEPTH_CLIP_CONTROL
-                unclipped_depth: false,
-                // Requires Features::CONSERVATIVE_RASTERIZATION
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: texture::Texture::DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less, // 1.
-                stencil: wgpu::StencilState::default(), // 2.
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-        }
-    );
+    // let render_pipeline_layout = device.create_pipeline_layout(
+    //     &wgpu::PipelineLayoutDescriptor {
+    //         label: Some("Render Pipeline Layout"),
+    //         bind_group_layouts: &[
+    //             &texture_array_layout,
+    //             &camera_layout,
+    //             &model_matrix_layout,
+    //         ],
+    //         push_constant_ranges: &[],
+    //     }
+    // );
+    // let render_pipeline = device.create_render_pipeline(
+    //     &wgpu::RenderPipelineDescriptor {
+    //         label: Some("Render Pipeline"),
+    //         layout: Some(&render_pipeline_layout),
+    //         vertex: wgpu::VertexState {
+    //             module: &shader.module,
+    //             entry_point: shader::Shader::VERTEX_ENTRY_POINT,
+    //             buffers: &shader.vertex_buffers,
+    //         },
+    //         fragment: Some(wgpu::FragmentState {
+    //             module: &shader.module,
+    //             entry_point: shader::Shader::FRAGMENT_ENTRY_POINT,
+    //             targets: &shader.fragment_targets,
+    //         }),
+    //         primitive: wgpu::PrimitiveState {
+    //             topology: wgpu::PrimitiveTopology::TriangleList,
+    //             strip_index_format: None,
+    //             front_face: wgpu::FrontFace::Ccw,
+    //             cull_mode: Some(wgpu::Face::Back),
+    //             // Setting this to anything other than Fill requires
+    //             // Features::NON_FILL_POLYGON_MODE
+    //             polygon_mode: wgpu::PolygonMode::Fill,
+    //             // Requires Features::DEPTH_CLIP_CONTROL
+    //             unclipped_depth: false,
+    //             // Requires Features::CONSERVATIVE_RASTERIZATION
+    //             conservative: false,
+    //         },
+    //         depth_stencil: Some(wgpu::DepthStencilState {
+    //             format: texture::Texture::DEPTH_FORMAT,
+    //             depth_write_enabled: true,
+    //             depth_compare: wgpu::CompareFunction::Less, // 1.
+    //             stencil: wgpu::StencilState::default(), // 2.
+    //             bias: wgpu::DepthBiasState::default(),
+    //         }),
+    //         multisample: wgpu::MultisampleState {
+    //             count: 1,
+    //             mask: !0,
+    //             alpha_to_coverage_enabled: false,
+    //         },
+    //         multiview: None,
+    //     }
+    // );
 
-    render_pipeline
+    // render_pipeline
 }
