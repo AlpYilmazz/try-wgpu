@@ -1,9 +1,8 @@
-use std::{num::NonZeroU32, marker::PhantomData};
+use std::{marker::PhantomData, num::NonZeroU32};
 
 use bytemuck::{Pod, Zeroable};
 use repr_trait::C;
 use wgpu::util::DeviceExt;
-
 
 #[derive(Debug)]
 pub struct BindingLayoutEntry {
@@ -59,47 +58,38 @@ impl<T: BindingSet> IntoBindingSet for T {
 #[allow(non_snake_case)]
 impl<B0> BindingSet for &B0
 where
-B0: Binding,
+    B0: Binding,
 {
     fn layout_desc(&self) -> BindingSetLayoutDescriptor {
         BindingSetLayoutDescriptor {
-            entries: vec![
-                self.get_layout_entry().with_binding(0),
-            ],
+            entries: vec![self.get_layout_entry().with_binding(0)],
         }
     }
 
     fn into_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
         let bs_layout = self.layout_desc();
 
-        let bind_group_layout = device.create_bind_group_layout(
-            &wgpu::BindGroupLayoutDescriptor {
-                label: None,
-                entries: &bs_layout.entries,
-            }
-        );
-        
-        let bind_group = device.create_bind_group(
-            &wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.get_resource(),
-                    },
-                ],
-            }
-        );
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &bs_layout.entries,
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.get_resource(),
+            }],
+        });
 
         bind_group
     }
 }
 
-pub trait GpuUniform: C + Pod + Zeroable {
-}
+pub trait GpuUniform: C + Pod + Zeroable {}
 
-pub trait StageLockedUniform: GpuUniform {    
+pub trait StageLockedUniform: GpuUniform {
     const FORCE_STAGE: wgpu::ShaderStages;
 }
 
@@ -123,8 +113,7 @@ where
     H: UpdateGpuUniform,
 {
     pub fn new(device: &wgpu::Device, stage: wgpu::ShaderStages, gpu_uniform: H::GU) -> Self {
-        let buffer = 
-            UniformBuffer::new_init_at(device, stage, gpu_uniform);
+        let buffer = UniformBuffer::new_init_at(device, stage, gpu_uniform);
         Self {
             gpu_uniform,
             buffer,
@@ -140,7 +129,7 @@ where
 impl<H> Uniform<H>
 where
     H: UpdateGpuUniform,
-    H::GU: Default
+    H::GU: Default,
 {
     pub fn new_default(device: &wgpu::Device, stage: wgpu::ShaderStages) -> Self {
         Self::new(device, stage, H::GU::default())
@@ -149,7 +138,7 @@ where
 
 impl<H> Binding for Uniform<H>
 where
-    H: UpdateGpuUniform
+    H: UpdateGpuUniform,
 {
     fn get_layout_entry(&self) -> BindingLayoutEntry {
         self.buffer.get_layout_entry()
@@ -163,18 +152,16 @@ where
 pub struct UniformBuffer<T: GpuUniform> {
     stage: wgpu::ShaderStages,
     buffer: wgpu::Buffer,
-    _marker: PhantomData<T>
+    _marker: PhantomData<T>,
 }
 
 impl<T: GpuUniform> UniformBuffer<T> {
     pub fn new_init_at(device: &wgpu::Device, stage: wgpu::ShaderStages, init: T) -> Self {
-        let buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&[init]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[init]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         Self {
             stage,
             buffer,
@@ -189,13 +176,11 @@ impl<T: GpuUniform> UniformBuffer<T> {
 
 impl<T: StageLockedUniform> UniformBuffer<T> {
     pub fn new_init(device: &wgpu::Device, init: T) -> Self {
-        let buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&[init]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[init]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         Self {
             stage: T::FORCE_STAGE,
             buffer,
@@ -222,7 +207,7 @@ impl<T: GpuUniform> Binding for UniformBuffer<T> {
     }
 }
 
-
+#[allow(unused)]
 #[cfg(test)]
 mod tests {
     use cgmath::*;
@@ -237,7 +222,7 @@ mod tests {
     }
     impl UpdateGpuUniform for Camera {
         type GU = CameraUniform;
-    
+
         fn update_uniform(&self, gpu_uniform: &mut Self::GU) {
             gpu_uniform.view_proj = (self.projection_matrix * self.view_matrix).into();
         }
@@ -250,7 +235,7 @@ mod tests {
             }
         }
     }
-    
+
     #[repr(C)]
     #[derive(Debug, Clone, Copy, C, Pod, Zeroable)]
     pub struct CameraUniform {
@@ -275,13 +260,12 @@ mod tests {
     }
     impl UpdateGpuUniform for Transform {
         type GU = ModelUniform;
-    
+
         fn update_uniform(&self, gpu_uniform: &mut Self::GU) {
-            gpu_uniform.model = (
-                Matrix4::from_translation(self.translation)
-                * Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z) 
-                * Matrix4::from(self.rotation)
-            ).into();
+            gpu_uniform.model = (Matrix4::from_translation(self.translation)
+                * Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z)
+                * Matrix4::from(self.rotation))
+            .into();
         }
     }
     impl Default for Transform {
@@ -293,7 +277,7 @@ mod tests {
             }
         }
     }
-    
+
     #[repr(C)]
     #[derive(Debug, Clone, Copy, C, Pod, Zeroable)]
     pub struct ModelUniform {
@@ -353,7 +337,6 @@ mod tests {
         }
     }
 
-
     fn uniform_usage(device: &wgpu::Device, queue: &wgpu::Queue) {
         // Create high level reprs of uniforms
         let camera = Camera::default();
@@ -361,9 +344,12 @@ mod tests {
         let color = Color::from_tuple((0.5, 0.5, 0.0, 1.0));
 
         // Create uniforms
-        let mut camera_uniform: Uniform<Camera> = Uniform::new_default(device, wgpu::ShaderStages::VERTEX);
-        let mut model_transform_uniform: Uniform<Transform> = Uniform::new_default(device, wgpu::ShaderStages::VERTEX);
-        let mut color_uniform: Uniform<Color> = Uniform::new_default(device, wgpu::ShaderStages::FRAGMENT);
+        let mut camera_uniform: Uniform<Camera> =
+            Uniform::new_default(device, wgpu::ShaderStages::VERTEX);
+        let mut model_transform_uniform: Uniform<Transform> =
+            Uniform::new_default(device, wgpu::ShaderStages::VERTEX);
+        let mut color_uniform: Uniform<Color> =
+            Uniform::new_default(device, wgpu::ShaderStages::FRAGMENT);
 
         // Update uniforms
         camera.update_uniform(&mut camera_uniform.gpu_uniform);
@@ -376,10 +362,7 @@ mod tests {
         color_uniform.sync_buffer(queue);
 
         // Create BindingSet
-        let mvp_binding_set = (
-            &camera_uniform,
-            &model_transform_uniform,
-        );
+        let mvp_binding_set = (&camera_uniform, &model_transform_uniform);
         let color_binding_set = &color_uniform;
         let texture = Texture::test_new();
 
@@ -387,12 +370,9 @@ mod tests {
         let mvp_layout_debug = mvp_binding_set.layout_desc();
         let mvp_bind_group = mvp_binding_set.into_bind_group(device);
         let color_bind_group = color_binding_set.into_bind_group(device);
-        let texture_bind_group = 
-            // texture
-            // .as_binding_set()
-            texture
-            .into_binding_set()
-            .into_bind_group(device);
+        let texture_bind_group = texture.into_binding_set().into_bind_group(device);
+        // texture
+        // .as_binding_set()
 
         // Debug
         dbg!(mvp_layout_debug);
@@ -400,7 +380,6 @@ mod tests {
         dbg!(color_bind_group);
         dbg!(texture_bind_group);
     }
-
 }
 
 macro_rules! impl_binding_set_tuple {
@@ -409,7 +388,7 @@ macro_rules! impl_binding_set_tuple {
         impl<$($param: Binding),*> BindingSet for ($(&$param,)*) {
             fn layout_desc(&self) -> BindingSetLayoutDescriptor {
                 let ($($param,)*) = *self;
-        
+
                 BindingSetLayoutDescriptor {
                     entries: vec![
                         $(
@@ -418,19 +397,19 @@ macro_rules! impl_binding_set_tuple {
                     ],
                 }
             }
-        
+
             fn into_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
                 let ($($param,)*) = *self;
-        
+
                 let bs_layout = self.layout_desc();
-        
+
                 let bind_group_layout = device.create_bind_group_layout(
                     &wgpu::BindGroupLayoutDescriptor {
                         label: None,
                         entries: &bs_layout.entries,
                     }
                 );
-                
+
                 let bind_group = device.create_bind_group(
                     &wgpu::BindGroupDescriptor {
                         label: None,
@@ -445,19 +424,19 @@ macro_rules! impl_binding_set_tuple {
                         ],
                     }
                 );
-        
+
                 bind_group
             }
         }
     };
 }
 
-impl_binding_set_tuple!((0,B0));
-impl_binding_set_tuple!((0,B0),(1,B1));
-impl_binding_set_tuple!((0,B0),(1,B1),(2,B2));
-impl_binding_set_tuple!((0,B0),(1,B1),(2,B2),(3,B3));
-impl_binding_set_tuple!((0,B0),(1,B1),(2,B2),(3,B3),(4,B4));
-impl_binding_set_tuple!((0,B0),(1,B1),(2,B2),(3,B3),(4,B4),(5,B5));
+impl_binding_set_tuple!((0, B0));
+impl_binding_set_tuple!((0, B0), (1, B1));
+impl_binding_set_tuple!((0, B0), (1, B1), (2, B2));
+impl_binding_set_tuple!((0, B0), (1, B1), (2, B2), (3, B3));
+impl_binding_set_tuple!((0, B0), (1, B1), (2, B2), (3, B3), (4, B4));
+impl_binding_set_tuple!((0, B0), (1, B1), (2, B2), (3, B3), (4, B4), (5, B5));
 
 // #[allow(non_snake_case)]
 // impl<B0, B1> BindingSet for (&B0, &B1,)
@@ -487,7 +466,7 @@ impl_binding_set_tuple!((0,B0),(1,B1),(2,B2),(3,B3),(4,B4),(5,B5));
 //                 entries: &bs_layout.entries,
 //             }
 //         );
-        
+
 //         let bind_group = device.create_bind_group(
 //             &wgpu::BindGroupDescriptor {
 //                 label: None,

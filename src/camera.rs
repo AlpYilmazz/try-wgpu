@@ -2,8 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use cgmath::*;
 use repr_trait::C;
 
-use crate::resource::bind::{UpdateGpuUniform, GpuUniform, StageLockedUniform};
-
+use crate::render::resource::bind::{GpuUniform, StageLockedUniform, UpdateGpuUniform};
 
 pub struct Camera {
     pub view_matrix: Matrix4<f32>,
@@ -91,7 +90,6 @@ impl Default for PerspectiveProjection {
         }
     }
 }
-
 
 #[rustfmt::skip]
 pub const OPENGL_TO_WGPU_MATRIX: Matrix4<f32> = Matrix4::new(

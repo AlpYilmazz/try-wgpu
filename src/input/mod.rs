@@ -1,16 +1,18 @@
 use std::{collections::HashSet, hash::Hash};
 
 use bevy_app::Plugin;
-use bevy_ecs::{schedule::{SystemLabel, ParallelSystemDescriptorCoercion}};
+use bevy_ecs::schedule::{ParallelSystemDescriptorCoercion, SystemLabel};
 
 use crate::CoreStage;
 
-use self::{keyboard::{keyboard_input_system, ScanCode, KeyCode, KeyboardInput}, mouse::{MouseWheel, MouseMotion, MouseButtonInput, mouse_button_input_system}};
-use self::mouse::{MouseButton};
+use self::mouse::MouseButton;
+use self::{
+    keyboard::{keyboard_input_system, KeyCode, KeyboardInput, ScanCode},
+    mouse::{mouse_button_input_system, MouseButtonInput, MouseMotion, MouseWheel},
+};
 
 pub mod keyboard;
 pub mod mouse;
-
 
 #[derive(SystemLabel)]
 pub struct InputSystem;
@@ -18,26 +20,22 @@ pub struct InputSystem;
 pub struct FlatInputPlugin;
 impl Plugin for FlatInputPlugin {
     fn build(&self, app: &mut bevy_app::App) {
-        app
-            .add_event::<ModifiersChanged>()
-            
+        app.add_event::<ModifiersChanged>()
             .add_event::<KeyboardInput>()
             .init_resource::<Input<ScanCode>>()
             .init_resource::<Input<KeyCode>>()
             .add_system_to_stage(
                 CoreStage::PreUpdate,
-                keyboard_input_system.label(InputSystem)
+                keyboard_input_system.label(InputSystem),
             )
-            
             .add_event::<MouseButtonInput>()
             .add_event::<MouseWheel>()
             .add_event::<MouseMotion>()
             .init_resource::<Input<MouseButton>>()
             .add_system_to_stage(
                 CoreStage::PreUpdate,
-                mouse_button_input_system.label(InputSystem)
-            )
-        ;
+                mouse_button_input_system.label(InputSystem),
+            );
     }
 }
 
@@ -45,6 +43,15 @@ impl Plugin for FlatInputPlugin {
 pub enum ButtonState {
     Pressed,
     Released,
+}
+
+impl From<winit::event::ElementState> for ButtonState {
+    fn from(val: winit::event::ElementState) -> Self {
+        match val {
+            winit::event::ElementState::Pressed => ButtonState::Pressed,
+            winit::event::ElementState::Released => ButtonState::Released,
+        }
+    }
 }
 
 pub struct ModifiersChanged(pub ModifiersState);
@@ -73,6 +80,27 @@ bitflags::bitflags! {
         const LOGO = 0b100 << 9;
         // const LLOGO = 0b010 << 9;
         // const RLOGO = 0b001 << 9;
+    }
+}
+
+impl From<winit::event::ModifiersState> for ModifiersState {
+    fn from(val: winit::event::ModifiersState) -> Self {
+        let mut state = ModifiersState::empty();
+
+        if val.shift() {
+            state |= ModifiersState::SHIFT;
+        }
+        if val.ctrl() {
+            state |= ModifiersState::CTRL;
+        }
+        if val.alt() {
+            state |= ModifiersState::ALT;
+        }
+        if val.logo() {
+            state |= ModifiersState::LOGO;
+        }
+
+        state
     }
 }
 

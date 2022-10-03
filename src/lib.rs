@@ -1,31 +1,34 @@
-
 use asset::FlatAssetPlugin;
-use bevy_app::{PluginGroup, Plugin};
-use bevy_asset::{AssetServer, FileAssetIo, AssetLoader, LoadedAsset};
-use bevy_ecs::schedule::{StageLabel, SystemStage};
+use bevy_app::{CoreStage, Plugin, PluginGroup};
+use bevy_asset::{AssetLoader, AssetServer, FileAssetIo, LoadedAsset};
+use bevy_ecs::{
+    schedule::{StageLabel, SystemStage},
+    system::{Commands, Res},
+};
 use bevy_reflect::TypeUuid;
 use cgmath::*;
 use input::FlatInputPlugin;
-use resource::{buffer::{Vertex, MeshVertex, Indices, InstanceRaw, InstanceUnit, self}, RenderResources, shader::Shader, mesh, TypedBindGroupLayout, RenderRef};
+use render::{mesh::GpuMesh, resource::buffer::Vertex, FlatRenderPlugin};
 use wgpu::{include_wgsl, util::DeviceExt};
-use winit::{window::Window, event::*};
+use window::{FlatWinitPlugin, FlatWindowPlugin};
+use winit::{event::*, window::Window};
 
 // pub mod legacy;
-pub mod util;
-pub mod resource;
 pub mod camera;
-pub mod texture;
+pub mod render;
 pub mod text;
+pub mod texture;
+pub mod util;
 
 pub mod asset;
 pub mod input;
-
+pub mod window;
 
 /*
 TypeUuid
 
 6948DF80-14BD-4E04-8842-7668D9C001F5 - Text
-4B8302DA-21AD-401F-AF45-1DFD956B80B5
+4B8302DA-21AD-401F-AF45-1DFD956B80B5 - ShaderSource
 8628FE7C-A4E9-4056-91BD-FD6AA7817E39
 10929DF8-15C5-472B-9398-7158AB89A0A6
 ED280816-E404-444A-A2D9-FFD2D171F928
@@ -36,26 +39,10 @@ D952EB9F-7AD2-4B1B-B3CE-386735205990
 AA97B177-9383-4934-8543-0F91A7A02836
 */
 
-
-#[derive(StageLabel)]
-pub enum StartupStage {
-    PreStartup,
-    Startup,
-    PostStartup,
-}
-
-#[derive(StageLabel)]
-pub enum CoreStage {
-    PreUpdate,
-    Update,
-    PostUpdate,
-}
-
 #[derive(StageLabel)]
 pub enum RenderStage {
     Render,
 }
-
 
 pub struct FlatEngineCore;
 pub struct FlatEngineComplete;
@@ -66,7 +53,9 @@ impl PluginGroup for FlatEngineCore {
             .add(FlatCorePlugin)
             .add(FlatInputPlugin)
             .add(FlatAssetPlugin)
-        ;
+            .add_after::<FlatAssetPlugin, FlatRenderPlugin>(FlatRenderPlugin)
+            .add(FlatWindowPlugin)
+            .add(FlatWinitPlugin::default());
     }
 }
 
@@ -77,24 +66,16 @@ impl PluginGroup for FlatEngineComplete {
     }
 }
 
-
 pub struct FlatCorePlugin;
 impl Plugin for FlatCorePlugin {
     fn build(&self, app: &mut bevy_app::App) {
-        app
-            .add_stage(StartupStage::PreStartup, SystemStage::parallel())
-            .add_stage_after(StartupStage::PreStartup, StartupStage::Startup, SystemStage::parallel())
-            .add_stage_after(StartupStage::Startup, StartupStage::PostStartup, SystemStage::parallel())
-            
-            .add_stage_after(StartupStage::PostStartup, CoreStage::PreUpdate, SystemStage::parallel())
-            .add_stage_after(CoreStage::PreUpdate, CoreStage::Update, SystemStage::parallel())
-            .add_stage_after(CoreStage::Update, CoreStage::PostUpdate, SystemStage::parallel())
-        
-            .add_stage_after(CoreStage::PostUpdate, RenderStage::Render, SystemStage::parallel())
-        ;
+        app.add_stage_after(
+            CoreStage::Last,
+            RenderStage::Render,
+            SystemStage::parallel(),
+        );
     }
 }
-
 
 #[derive(TypeUuid)]
 #[uuid = "6948DF80-14BD-4E04-8842-7668D9C001F5"]
@@ -107,7 +88,9 @@ impl AssetLoader for TextLoader {
         load_context: &'a mut bevy_asset::LoadContext,
     ) -> bevy_asset::BoxedFuture<'a, anyhow::Result<(), anyhow::Error>> {
         Box::pin(async move {
-            load_context.set_default_asset(LoadedAsset::new(Text(String::from_utf8(bytes.to_owned()).unwrap())));
+            load_context.set_default_asset(LoadedAsset::new(Text(
+                String::from_utf8(bytes.to_owned()).unwrap(),
+            )));
             Ok(())
         })
     }
@@ -117,6 +100,47 @@ impl AssetLoader for TextLoader {
     }
 }
 
+pub fn create_wgpu_resources(window: Res<winit::window::Window>, mut commands: Commands) {
+    let size = window.inner_size();
+
+    let instance = wgpu::Instance::new(wgpu::Backends::all());
+    let surface = unsafe { instance.create_surface(window.as_ref()) };
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface: Some(&surface),
+    }))
+    .unwrap();
+
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: None,
+            features: wgpu::Features::empty() | wgpu::Features::TEXTURE_BINDING_ARRAY,
+            limits: if cfg!(target_arch = "wasm32") {
+                wgpu::Limits::downlevel_webgl2_defaults()
+            } else {
+                wgpu::Limits::default()
+            },
+        },
+        None, // trace_path
+    ))
+    .unwrap();
+
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: surface.get_supported_formats(&adapter)[0],
+        width: size.width,
+        height: size.height,
+        present_mode: wgpu::PresentMode::Fifo,
+    };
+
+    surface.configure(&device, &config);
+
+    commands.insert_resource(surface);
+    commands.insert_resource(device);
+    commands.insert_resource(queue);
+    commands.insert_resource(config);
+}
 
 pub struct State {
     surface: wgpu::Surface,
@@ -125,71 +149,94 @@ pub struct State {
     config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
     depth_texture: texture::Texture,
-    render_resources: RenderResources,
     asset_server: AssetServer,
     loaded: bool,
 }
 
 impl State {
     const VERTICES: &'static [Vertex] = &[
-        Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.00759614], }, // A
-        Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.43041354], }, // B
-        Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.949397], }, // C
-        Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.84732914], }, // D
-        Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.2652641], }, // E
+        Vertex {
+            position: [-0.0868241, 0.49240386, 0.0],
+            tex_coords: [0.4131759, 0.00759614],
+        }, // A
+        Vertex {
+            position: [-0.49513406, 0.06958647, 0.0],
+            tex_coords: [0.0048659444, 0.43041354],
+        }, // B
+        Vertex {
+            position: [-0.21918549, -0.44939706, 0.0],
+            tex_coords: [0.28081453, 0.949397],
+        }, // C
+        Vertex {
+            position: [0.35966998, -0.3473291, 0.0],
+            tex_coords: [0.85967, 0.84732914],
+        }, // D
+        Vertex {
+            position: [0.44147372, 0.2347359, 0.0],
+            tex_coords: [0.9414737, 0.2652641],
+        }, // E
     ];
 
-    const INDICES: &'static [u16] = &[
-        0, 1, 4,
-        1, 2, 4,
-        2, 3, 4,
-    ];
+    const INDICES: &'static [u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
     const NUM_INSTANCES_PER_ROW: u32 = 1;
     const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = Vector3::new(
         Self::NUM_INSTANCES_PER_ROW as f32 * 0.5,
         0.0,
-        Self::NUM_INSTANCES_PER_ROW as f32 * 0.5
+        Self::NUM_INSTANCES_PER_ROW as f32 * 0.5,
     );
 
     const BACKGROUND_VERTICES: &'static [Vertex] = &[
-        Vertex { position: [-0.5, 0.5, 0.0], tex_coords: [0.0, 0.0] }, // A
-        Vertex { position: [-0.5, -0.5, 0.0], tex_coords: [0.0, 1.0] }, // B
-        Vertex { position: [0.5, -0.5, 0.0], tex_coords: [1.0, 1.0] }, // C
-        Vertex { position: [0.5, 0.5, 0.0], tex_coords: [1.0, 0.0] }, // E
+        Vertex {
+            position: [-0.5, 0.5, 0.0],
+            tex_coords: [0.0, 0.0],
+        }, // A
+        Vertex {
+            position: [-0.5, -0.5, 0.0],
+            tex_coords: [0.0, 1.0],
+        }, // B
+        Vertex {
+            position: [0.5, -0.5, 0.0],
+            tex_coords: [1.0, 1.0],
+        }, // C
+        Vertex {
+            position: [0.5, 0.5, 0.0],
+            tex_coords: [1.0, 0.0],
+        }, // E
     ];
 
-    const BACKGROUND_INDICES: &'static [u16] = &[
-        0, 1, 2,
-        0, 2, 3,
-    ];
+    const BACKGROUND_INDICES: &'static [u16] = &[0, 1, 2, 0, 2, 3];
 
     pub async fn new(window: &Window) -> Self {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::Backends::all());
         let surface = unsafe { instance.create_surface(window) };
-        let adapter = instance.request_adapter(
-            &wgpu::RequestAdapterOptions {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
-            }
-        ).await.unwrap();
+            })
+            .await
+            .unwrap();
 
-        let (device, queue) = adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                features: wgpu::Features::empty() | wgpu::Features::TEXTURE_BINDING_ARRAY ,
-                limits: if cfg!(target_arch = "wasm32") {
-                    wgpu::Limits::downlevel_webgl2_defaults()
-                } else {
-                    wgpu::Limits::default()
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: None,
+                    features: wgpu::Features::empty() | wgpu::Features::TEXTURE_BINDING_ARRAY,
+                    limits: if cfg!(target_arch = "wasm32") {
+                        wgpu::Limits::downlevel_webgl2_defaults()
+                    } else {
+                        wgpu::Limits::default()
+                    },
                 },
-            },
-            None, // trace_path
-        ).await.unwrap();
-        
+                None, // trace_path
+            )
+            .await
+            .unwrap();
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface.get_supported_formats(&adapter)[0],
@@ -199,14 +246,9 @@ impl State {
         };
 
         surface.configure(&device, &config);
-        
-        let render_resources = RenderResources::empty();
 
-        let depth_texture = texture::Texture::create_depth_texture(
-            &device,
-            &config,
-            "Depth Texture",
-        );
+        let depth_texture =
+            texture::Texture::create_depth_texture(&device, &config, "Depth Texture");
 
         let asset_server = AssetServer::new(FileAssetIo::new(".", false));
         for file in ["posx", "negx", "posy", "negy", "posz", "negz"] {
@@ -215,7 +257,7 @@ impl State {
             // futures_lite::future::block_on(asset_server.load_bytes_async(path));
         }
         let loaded = false;
-        
+
         Self {
             surface,
             device,
@@ -223,8 +265,7 @@ impl State {
             config,
             size,
             depth_texture,
-            render_resources,
-            
+
             asset_server,
             loaded,
         }
@@ -236,12 +277,9 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            
-            self.depth_texture = texture::Texture::create_depth_texture(
-                &self.device,
-                &self.config,
-                "Depth Texture",
-            );
+
+            self.depth_texture =
+                texture::Texture::create_depth_texture(&self.device, &self.config, "Depth Texture");
         }
     }
 
@@ -265,47 +303,45 @@ impl State {
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
-            }
-        );
+            });
 
         {
-            let mut render_pass = encoder.begin_render_pass(
-                &wgpu::RenderPassDescriptor {
-                    label: Some("Render Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: true,
-                        },
-                    })],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.depth_texture.view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: true,
-                        }),
-                        stencil_ops: None,
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: true,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: true,
                     }),
-                }
-            );
+                    stencil_ops: None,
+                }),
+            });
 
             // for (pipeline_id, render_refs) in &self.render_refs {
             //     self.set_pipeline(&mut render_pass, *pipeline_id);
-            //     for render_ref in render_refs {   
+            //     for render_ref in render_refs {
             //         self.render_pass_draw(&mut render_pass, render_ref);
             //     }
             // }
-
         } // drop(render_pass) <- mut borrow encoder <- mut borrow self
-        
-        
+
         self.queue.submit(std::iter::once(encoder.finish()));
 
         output.present();
@@ -318,18 +354,18 @@ impl State {
         render_pass: &mut wgpu::RenderPass<'a>,
         render_pipeline_id: usize,
     ) {
-        let render_pipeline = 
-            &self.render_resources.render_pipelines[render_pipeline_id];
-            
-        render_pass.set_pipeline(render_pipeline);
+        // let render_pipeline =
+        //     &self.render_resources.render_pipelines[render_pipeline_id];
+
+        // render_pass.set_pipeline(render_pipeline);
     }
 
     fn render_pass_draw<'a>(
         &'a self,
         render_pass: &mut wgpu::RenderPass<'a>,
-        render_ref: &RenderRef,
+        // render_ref: &RenderRef,
     ) {
-        // let mesh_0 = 
+        // let mesh_0 =
         //     &self.render_resources.meshes[render_ref.mesh];
 
         // for (index, bind_group_id) in (&render_ref.bind_groups).into_iter().enumerate() {
@@ -363,7 +399,7 @@ impl State {
 //         let padding = (align - unpadded_bytes_per_row % align) % align;
 //         let padded_bytes_per_row = unpadded_bytes_per_row + padding;
 
-//         // println!("{}\n{}\n{}\n", padded_bytes_per_row, self.size.height, 
+//         // println!("{}\n{}\n{}\n", padded_bytes_per_row, self.size.height,
 //         //     padded_bytes_per_row * self.size.height);
 
 //         let frame = output.texture.as_image_copy();
@@ -387,7 +423,7 @@ impl State {
 //         let buffer_slice = self.framesave_buffer.slice(..);
 //         let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
 //         buffer_slice.map_async(
-//             wgpu::MapMode::Read, 
+//             wgpu::MapMode::Read,
 //             move |result| {
 //                 tx.send(result).unwrap();
 //             }
@@ -413,7 +449,13 @@ impl State {
 //             _ => eprintln!("Something went wrong"),
 //         }
 
-fn save_gif(path: &str, frames: &mut Vec<Vec<u8>>, speed: i32, w: u16, h: u16) -> anyhow::Result<()> {
+fn save_gif(
+    path: &str,
+    frames: &mut Vec<Vec<u8>>,
+    speed: i32,
+    w: u16,
+    h: u16,
+) -> anyhow::Result<()> {
     use gif::{Encoder, Frame, Repeat};
 
     let mut image = std::fs::File::create(path)?;

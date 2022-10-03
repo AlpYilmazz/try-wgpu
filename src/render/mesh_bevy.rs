@@ -1,8 +1,6 @@
 use wgpu::util::DeviceExt;
 
-use super::buffer::Indices;
-
-
+use super::resource::buffer::Indices;
 
 pub struct MeshVertexBufferLayout {
     pub array_stride: wgpu::BufferAddress,
@@ -53,19 +51,17 @@ impl Mesh {
     }
 
     pub fn get_index_buffer_bytes(&self) -> Option<&[u8]> {
-        self.indices.as_ref().map(|inds| {
-            match inds {
-                Indices::U16(ivals) => bytemuck::cast_slice(&ivals[..]),
-                Indices::U32(ivals) => bytemuck::cast_slice(&ivals[..]),
-            }
+        self.indices.as_ref().map(|inds| match inds {
+            Indices::U16(ivals) => bytemuck::cast_slice(&ivals[..]),
+            Indices::U32(ivals) => bytemuck::cast_slice(&ivals[..]),
         })
     }
 
     pub fn get_vertex_buffer_layout(&self) -> MeshVertexBufferLayout {
         let mut offset = 0;
-        let attributes: Vec<wgpu::VertexAttribute> = self.attributes[..]    
+        let attributes: Vec<wgpu::VertexAttribute> = self.attributes[..]
             .into_iter()
-            .enumerate()    
+            .enumerate()
             .map(|(i, attr)| {
                 let va = wgpu::VertexAttribute {
                     format: (&attr.values).into(),
@@ -73,7 +69,7 @@ impl Mesh {
                     shader_location: i as u32,
                 };
                 offset += attr.descriptor.format.get_size();
-                
+
                 va
             })
             .collect();
@@ -89,16 +85,14 @@ impl Mesh {
         let vertex_count = self.count_vertices();
 
         let mut vertex_buffer_bytes = vec![0; vertex_size * vertex_count];
-        
+
         let mut attr_offset = 0;
         for attribute in &self.attributes {
             let attr_size = attribute.descriptor.format.get_size() as usize;
             let attr_bytes: &[u8] = attribute.values.get_bytes();
-            for (vertex_index, attr_bytes) in
-                attr_bytes.chunks_exact(attr_size).enumerate()
-            {
+            for (vertex_index, attr_bytes) in attr_bytes.chunks_exact(attr_size).enumerate() {
                 let offset = vertex_index * vertex_size + attr_offset;
-                vertex_buffer_bytes[offset .. offset + attr_size].copy_from_slice(attr_bytes);
+                vertex_buffer_bytes[offset..offset + attr_size].copy_from_slice(attr_bytes);
             }
             attr_offset += attr_size;
         }
@@ -116,7 +110,10 @@ impl Mesh {
 
     // TODO: should I check for vertex counts being same
     pub fn count_vertices(&self) -> usize {
-        self.attributes.get(0).map(|attr0| attr0.values.len()).unwrap_or(0)
+        self.attributes
+            .get(0)
+            .map(|attr0| attr0.values.len())
+            .unwrap_or(0)
     }
 }
 
@@ -318,7 +315,7 @@ pub enum GpuMeshAssembly {
     },
     NonIndexed {
         vertex_count: usize,
-    }
+    },
 }
 
 pub struct GpuMesh {
@@ -329,32 +326,27 @@ pub struct GpuMesh {
 }
 
 impl GpuMesh {
-    pub fn from_mesh(
-        mesh: &Mesh,
-        device: &wgpu::Device,
-    ) -> GpuMesh {
+    pub fn from_mesh(mesh: &Mesh, device: &wgpu::Device) -> GpuMesh {
         GpuMesh {
             mesh_vertex_buffer_layout: mesh.get_vertex_buffer_layout(),
-            vertex_buffer: device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Vertex Buffer"),
-                    contents: &mesh.get_vertex_buffer_bytes(),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }
-            ),
+            vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: &mesh.get_vertex_buffer_bytes(),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
             assembly: match mesh.get_index_buffer_bytes() {
                 Some(indices) => GpuMeshAssembly::Indexed {
-                    index_buffer: device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("Index Buffer"),
-                            contents: indices,
-                            usage: wgpu::BufferUsages::INDEX,
-                        }
-                    ),
+                    index_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Index Buffer"),
+                        contents: indices,
+                        usage: wgpu::BufferUsages::INDEX,
+                    }),
                     index_count: mesh.get_indices().unwrap().len(),
                     index_format: mesh.get_indices().unwrap().into(),
                 },
-                None => GpuMeshAssembly::NonIndexed { vertex_count: mesh.count_vertices() },
+                None => GpuMeshAssembly::NonIndexed {
+                    vertex_count: mesh.count_vertices(),
+                },
             },
             primitive_topology: mesh.get_primitive_topology(),
         }

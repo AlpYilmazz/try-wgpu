@@ -1,4 +1,5 @@
-
+use bevy_app::App;
+use try_wgpu::FlatEngineComplete;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -26,44 +27,46 @@ async fn run() {
                     // All other errors (Outdated, Timeout) should be resolved by the next frame
                     Err(e) => eprintln!("{:?}", e),
                 }
-            },
+            }
             Event::MainEventsCleared => {
                 // RedrawRequested will only trigger once, unless we manually
                 // request it.
                 window.request_redraw();
-            },
-            Event::WindowEvent {
-                event,
-                window_id,
-            } if window_id == window.id() && !state.input(&event) => {
+            }
+            Event::WindowEvent { event, window_id }
+                if window_id == window.id() && !state.input(&event) =>
+            {
                 match event {
-                    WindowEvent::CloseRequested 
+                    WindowEvent::CloseRequested
                     | WindowEvent::KeyboardInput {
                         input:
-                        KeyboardInput {
-                            state: ElementState::Pressed,
-                            virtual_keycode: Some(VirtualKeyCode::Escape),
-                            ..
-                        },
+                            KeyboardInput {
+                                state: ElementState::Pressed,
+                                virtual_keycode: Some(VirtualKeyCode::Escape),
+                                ..
+                            },
                         ..
                     } => {
                         *control_flow = ControlFlow::Exit;
                         return;
-                    },
+                    }
                     WindowEvent::Resized(physical_size) => {
                         state.resize(physical_size); // TUTORIAL: *physical_size
                     }
                     WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                         state.resize(*new_inner_size); // TUTORIAL: **new_inner_size
                     }
-                    _ => ()
+                    _ => (),
                 }
-            },
-            _ => ()
+            }
+            _ => (),
         }
     });
 }
 
 fn main() {
-    pollster::block_on(run())
+    // pollster::block_on(run());
+
+    let mut app = App::new();
+    app.add_plugins(FlatEngineComplete).run();
 }

@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
-use cgmath::{Vector3, Quaternion};
-
+use cgmath::{Quaternion, Vector3};
+use repr_trait::C;
 
 pub enum Indices {
     U16(Vec<u16>),
@@ -23,12 +23,12 @@ impl Indices {
                 for ind in vec {
                     *ind += offset as u16;
                 }
-            },
+            }
             Indices::U32(vec) => {
                 for ind in vec {
                     *ind += offset;
                 }
-            },
+            }
         }
     }
 
@@ -36,16 +36,16 @@ impl Indices {
         match (self, other) {
             (Indices::U16(vs), Indices::U16(vo)) => {
                 vs.extend(vo);
-            },
+            }
             (Indices::U32(vs), Indices::U32(vo)) => {
                 vs.extend(vo);
-            },
+            }
             (Indices::U16(vs), Indices::U32(vo)) => {
                 vs.extend(vo.iter().map(|a| *a as u16));
-            },
+            }
             (Indices::U32(vs), Indices::U16(vo)) => {
                 vs.extend(vo.iter().map(|a| *a as u32));
-            },
+            }
         }
     }
 }
@@ -71,7 +71,7 @@ impl From<Vec<u32>> for Indices {
     }
 }
 
-pub trait MeshVertex: Sized + Pod + Zeroable {
+pub trait MeshVertex: Sized + C + Pod + Zeroable {
     const ATTR_NAMES: &'static [&'static str];
     const ATTRIBUTES: &'static [wgpu::VertexAttribute];
 
@@ -107,7 +107,7 @@ pub trait FromRawVertex: MeshVertex {
     ) -> Self;
 }
 
-pub trait InstanceUnit: Sized + Pod + Zeroable {
+pub trait InstanceUnit: Sized + C + Pod + Zeroable {
     // const ATTR_NAMES: &'static [&'static str];
     const ATTRIBUTES: &'static [wgpu::VertexAttribute];
 
@@ -124,46 +124,20 @@ pub trait InstanceUnit: Sized + Pod + Zeroable {
     }
 }
 
-pub trait Uniform: Pod + Zeroable {
-    const ENTRIES: &'static [wgpu::BindGroupLayoutEntry];
-
-    fn layout_desc() -> wgpu::BindGroupLayoutDescriptor<'static> {
-        wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: Self::ENTRIES,
-        }
-    }
-    // fn resources(&self) -> &[wgpu::BindingResource];
-}
-
-pub trait BindGroup {
-    fn layout_desc() -> wgpu::BindGroupLayoutDescriptor<'static>;
-}
-impl<T> BindGroup for T where T: Uniform {
-    fn layout_desc() -> wgpu::BindGroupLayoutDescriptor<'static> {
-        <Self as Uniform>::layout_desc()
-    }
-}
-
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, C, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub tex_coords: [f32; 2],
 }
 
 impl MeshVertex for Vertex {
-    const ATTR_NAMES: &'static [&'static str] = 
-        &[
-            "Position",
-            "Texture Coordinates"
-        ];
-    
-    const ATTRIBUTES: &'static [wgpu::VertexAttribute] = 
-        &wgpu::vertex_attr_array![
-            0 => Float32x3,
-            1 => Float32x2,
-        ];
+    const ATTR_NAMES: &'static [&'static str] = &["Position", "Texture Coordinates"];
+
+    const ATTRIBUTES: &'static [wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
+        0 => Float32x3,
+        1 => Float32x2,
+    ];
 }
 
 impl FromRawVertex for Vertex {
@@ -187,24 +161,18 @@ impl FromRawVertices for Vertex {
         _normals: &[f32],
         _vertex_color: &[f32],
     ) -> Vec<Self> {
-        (0..positions.len() / 3).into_iter()
-            .map(|i| {
-                Vertex {
-                    position: [
-                        positions[i],
-                        positions[i+1],
-                        positions[i+2],
-                    ],
-                    tex_coords: [
-                        *texcoords.get(i).unwrap_or(&0.0),
-                        *texcoords.get(i+1).unwrap_or(&0.0),
-                    ]
-                }
+        (0..positions.len() / 3)
+            .into_iter()
+            .map(|i| Vertex {
+                position: [positions[i], positions[i + 1], positions[i + 2]],
+                tex_coords: [
+                    *texcoords.get(i).unwrap_or(&0.0),
+                    *texcoords.get(i + 1).unwrap_or(&0.0),
+                ],
             })
             .collect()
     }
 }
-
 
 pub struct Instance {
     pub position: Vector3<f32>,
@@ -215,27 +183,25 @@ pub struct Instance {
 impl Instance {
     pub fn to_raw(&self) -> InstanceRaw {
         InstanceRaw {
-            model: (
-                cgmath::Matrix4::from_translation(self.position)
-                * cgmath::Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z) 
-                * cgmath::Matrix4::from(self.rotation)
-            ).into(),
+            model: (cgmath::Matrix4::from_translation(self.position)
+                * cgmath::Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z)
+                * cgmath::Matrix4::from(self.rotation))
+            .into(),
         }
     }
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, C, Pod, Zeroable)]
 pub struct InstanceRaw {
     model: [[f32; 4]; 4],
 }
 
 impl InstanceUnit for InstanceRaw {
-    const ATTRIBUTES: &'static [wgpu::VertexAttribute] = 
-        &wgpu::vertex_attr_array![
-            5 => Float32x4,
-            6 => Float32x4,
-            7 => Float32x4,
-            8 => Float32x4,
-        ];
+    const ATTRIBUTES: &'static [wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
+        5 => Float32x4,
+        6 => Float32x4,
+        7 => Float32x4,
+        8 => Float32x4,
+    ];
 }

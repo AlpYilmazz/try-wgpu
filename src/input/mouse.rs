@@ -68,6 +68,15 @@ pub fn mouse_button_input_system(
     }
 }
 
+impl MouseButtonInput {
+    pub fn from_with(button: winit::event::MouseButton, state: winit::event::ElementState) -> Self {
+        Self {
+            button: button.into(),
+            state: state.into(),
+        }
+    }
+}
+
 impl From<winit::event::MouseButton> for MouseButton {
     fn from(val: winit::event::MouseButton) -> Self {
         match val {
@@ -82,14 +91,12 @@ impl From<winit::event::MouseButton> for MouseButton {
 impl From<winit::event::MouseScrollDelta> for MouseWheel {
     fn from(val: winit::event::MouseScrollDelta) -> Self {
         match val {
-            winit::event::MouseScrollDelta::LineDelta(y, x)
-            => MouseWheel {
+            winit::event::MouseScrollDelta::LineDelta(y, x) => MouseWheel {
                 unit: MouseScrollUnit::Line,
                 x,
                 y,
             },
-            winit::event::MouseScrollDelta::PixelDelta(pos)
-            => MouseWheel {
+            winit::event::MouseScrollDelta::PixelDelta(pos) => MouseWheel {
                 unit: MouseScrollUnit::Pixel,
                 x: pos.x as f32,
                 y: pos.y as f32,
@@ -102,6 +109,14 @@ impl From<winit::dpi::PhysicalPosition<f64>> for MouseMotion {
     fn from(val: winit::dpi::PhysicalPosition<f64>) -> Self {
         MouseMotion {
             delta: cgmath::Vector2::new(val.x as f32, val.y as f32),
+        }
+    }
+}
+
+impl From<(f64, f64)> for MouseMotion {
+    fn from(val: (f64, f64)) -> Self {
+        MouseMotion {
+            delta: cgmath::Vector2::new(val.0 as f32, val.1 as f32),
         }
     }
 }

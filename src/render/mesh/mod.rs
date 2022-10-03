@@ -1,10 +1,10 @@
+use bevy_ecs::prelude::Component;
 use wgpu::util::DeviceExt;
 
-use super::buffer::{MeshVertex, Indices, FromRawVertex};
+use super::resource::buffer::{FromRawVertex, Indices, MeshVertex};
 
-pub mod util;
 pub mod primitive;
-
+pub mod util;
 
 pub struct Model<V: MeshVertex> {
     pub meshes: Vec<Mesh<V>>,
@@ -43,10 +43,8 @@ impl<V: MeshVertex> Mesh<V> {
     where
         V: FromRawVertex,
     {
-        let (models, _) = tobj::load_obj(
-            filepath,
-            &tobj::GPU_LOAD_OPTIONS
-        ).expect("Obj file could not be loaded");
+        let (models, _) = tobj::load_obj(filepath, &tobj::GPU_LOAD_OPTIONS)
+            .expect("Obj file could not be loaded");
 
         let meshes: Vec<Mesh<V>> = models
             .into_iter()
@@ -55,20 +53,22 @@ impl<V: MeshVertex> Mesh<V> {
                     .into_iter()
                     .map(|i| {
                         V::from_raw(
-                            &model.mesh.positions.as_slice()[i..i+3].try_into().unwrap(),
+                            &model.mesh.positions.as_slice()[i..i + 3]
+                                .try_into()
+                                .unwrap(),
                             &[
                                 *model.mesh.texcoords.get(i).unwrap_or(&Self::ZERO),
-                                *model.mesh.texcoords.get(i+1).unwrap_or(&Self::ZERO),
+                                *model.mesh.texcoords.get(i + 1).unwrap_or(&Self::ZERO),
                             ],
                             &[
                                 *model.mesh.normals.get(i).unwrap_or(&Self::ZERO),
-                                *model.mesh.normals.get(i+1).unwrap_or(&Self::ZERO),
-                                *model.mesh.normals.get(i+2).unwrap_or(&Self::ZERO),
+                                *model.mesh.normals.get(i + 1).unwrap_or(&Self::ZERO),
+                                *model.mesh.normals.get(i + 2).unwrap_or(&Self::ZERO),
                             ],
                             &[
                                 *model.mesh.vertex_color.get(i).unwrap_or(&Self::ZERO),
-                                *model.mesh.vertex_color.get(i+1).unwrap_or(&Self::ZERO),
-                                *model.mesh.vertex_color.get(i+2).unwrap_or(&Self::ZERO),
+                                *model.mesh.vertex_color.get(i + 1).unwrap_or(&Self::ZERO),
+                                *model.mesh.vertex_color.get(i + 2).unwrap_or(&Self::ZERO),
                             ],
                             // &[0.0, 0.0],
                             // &[0.0, 0.0, 0.0],
@@ -79,14 +79,14 @@ impl<V: MeshVertex> Mesh<V> {
                         )
                     })
                     .collect();
-                
+
                 // V::from_raw(
                 //     &model.mesh.positions,
                 //     &model.mesh.texcoords,
                 //     &model.mesh.normals,
                 //     &model.mesh.vertex_color
                 // );
-                
+
                 Self::with_all(
                     wgpu::PrimitiveTopology::TriangleList,
                     vertices,
@@ -94,10 +94,8 @@ impl<V: MeshVertex> Mesh<V> {
                 )
             })
             .collect();
-    
-        Model {
-            meshes
-        }
+
+        Model { meshes }
     }
 
     pub fn get_vertices(&self) -> &[V] {
@@ -133,11 +131,9 @@ impl<V: MeshVertex> Mesh<V> {
     }
 
     pub fn get_index_buffer_bytes(&self) -> Option<&[u8]> {
-        self.indices.as_ref().map(|inds| {
-            match inds {
-                Indices::U16(ivals) => bytemuck::cast_slice(&ivals[..]),
-                Indices::U32(ivals) => bytemuck::cast_slice(&ivals[..]),
-            }
+        self.indices.as_ref().map(|inds| match inds {
+            Indices::U16(ivals) => bytemuck::cast_slice(&ivals[..]),
+            Indices::U32(ivals) => bytemuck::cast_slice(&ivals[..]),
         })
     }
 
@@ -145,7 +141,8 @@ impl<V: MeshVertex> Mesh<V> {
         bytemuck::cast_slice(&self.vertices)
     }
 
-    pub fn get_vertex_buffer_layout(&self) -> wgpu::VertexBufferLayout<'static> { // TODO: lifetime
+    pub fn get_vertex_buffer_layout(&self) -> wgpu::VertexBufferLayout<'static> {
+        // TODO: lifetime
         V::layout()
     }
 
@@ -164,10 +161,7 @@ pub struct BatchMesh<V: MeshVertex> {
 }
 
 impl<V: MeshVertex> BatchMesh<V> {
-    pub fn new(
-        primitive_topology: wgpu::PrimitiveTopology,
-        indexed: bool,
-    ) -> Self {
+    pub fn new(primitive_topology: wgpu::PrimitiveTopology, indexed: bool) -> Self {
         Self {
             indexed,
             inner_mesh: Mesh::new(primitive_topology),
@@ -177,34 +171,34 @@ impl<V: MeshVertex> BatchMesh<V> {
     pub fn add(&mut self, mesh: Mesh<V>) {
         let (vertices, indices) = (mesh.vertices, mesh.indices);
         let offset = vertices.len() as u32;
-        
+
         self.inner_mesh.push_vertices(vertices);
-        
+
         match self.inner_mesh.get_indices_mut() {
             Some(inner_indices) => {
                 match indices {
                     Some(mut indices) => {
                         indices.shift(offset);
                         inner_indices.extend(indices);
-                    },
+                    }
                     // TODO: OR: may convert non-indexed into indexed
                     // by triplet indexing
                     None => panic!("Index requirements does not match"),
                 }
-            },
+            }
             None => {
                 match (self.indexed, indices) {
                     (true, Some(mut indices)) => {
                         indices.shift(offset);
                         self.inner_mesh.set_indices(indices);
-                    },
+                    }
                     (false, None) => {
                         // Normal Case
-                    },
+                    }
                     // TODO: OR: may produce garbage gracefully
                     _ => panic!("Index requirements does not match"),
                 }
-            },
+            }
         }
     }
 
@@ -229,9 +223,10 @@ pub enum GpuMeshAssembly {
     },
     NonIndexed {
         vertex_count: usize,
-    }
+    },
 }
 
+#[derive(Component)]
 pub struct GpuMesh {
     pub vertex_buffer_layout: wgpu::VertexBufferLayout<'static>, // TODO: lifetime again
     pub vertex_buffer: wgpu::Buffer,
@@ -240,37 +235,32 @@ pub struct GpuMesh {
 }
 
 impl GpuMesh {
-    pub fn from_mesh<'a, V, M>(
-        mesh: M,
-        device: &wgpu::Device,
-    ) -> GpuMesh
+    pub fn from_mesh<'a, V, M>(mesh: M, device: &wgpu::Device) -> GpuMesh
     where
         V: MeshVertex,
-        M: Into<&'a Mesh<V>>
+        M: Into<&'a Mesh<V>>,
     {
         let mesh: &Mesh<V> = mesh.into();
         GpuMesh {
             vertex_buffer_layout: mesh.get_vertex_buffer_layout(),
-            vertex_buffer: device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Vertex Buffer"),
-                    contents: &mesh.get_vertex_buffer_bytes(),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }
-            ),
+            vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: &mesh.get_vertex_buffer_bytes(),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
             assembly: match mesh.get_index_buffer_bytes() {
                 Some(indices) => GpuMeshAssembly::Indexed {
-                    index_buffer: device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("Index Buffer"),
-                            contents: indices,
-                            usage: wgpu::BufferUsages::INDEX,
-                        }
-                    ),
+                    index_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Index Buffer"),
+                        contents: indices,
+                        usage: wgpu::BufferUsages::INDEX,
+                    }),
                     index_count: mesh.get_indices().unwrap().len(),
                     index_format: mesh.get_indices().unwrap().into(),
                 },
-                None => GpuMeshAssembly::NonIndexed { vertex_count: mesh.vertex_count() },
+                None => GpuMeshAssembly::NonIndexed {
+                    vertex_count: mesh.vertex_count(),
+                },
             },
             primitive_topology: mesh.get_primitive_topology(),
         }

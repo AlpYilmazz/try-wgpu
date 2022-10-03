@@ -1,7 +1,6 @@
-use bevy_ecs::{system::ResMut, prelude::EventReader};
+use bevy_ecs::{prelude::EventReader, system::ResMut};
 
-use super::{Input, ButtonState};
-
+use super::{ButtonState, Input};
 
 pub struct KeyboardInput {
     scancode: ScanCode,
